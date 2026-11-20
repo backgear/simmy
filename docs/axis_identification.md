@@ -187,6 +187,15 @@ Fit JSON uses physical seconds and calibrated effort/position units. Simmy's
 mechanical stepping uses per-tick units; do not copy fitted coefficients into a
 simmy config without an explicit time/coordinate/effort conversion.
 
+The required next replay interface is described in the
+[device contract](axis_device_protocol.md#required-host-artifact-recorded-move-replay-and-comparison):
+archive the actual recording and replay any characterized move or the full run,
+not a regenerated ideal trajectory. Overlay measured/simulated positions and
+plot their errors. Mechanical replay uses measured effort; end-to-end command
+replay requires an explicit drive/controller model. The current prototype only
+replays held-out validation blocks, so arbitrary/full-run replay remains to be
+implemented.
+
 Remaining extensions: spectral estimates/coherence for injected excitation,
 Coulomb/stiction in the compliant model, sensor-offset calibration, uncertainty
 from repeated trials, and simmy unit conversion/export. Both demos check the

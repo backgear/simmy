@@ -259,6 +259,64 @@ diagnostics, and preserve manifest/run metadata beside the CSV. If analog effort
 needs resampling onto the position grid, apply documented filtering/alignment;
 never silently substitute command for missing effort.
 
+## Required host artifact: recorded-move replay and comparison
+
+Every successful characterization MUST produce a self-contained recording bundle
+that allows the **actual acquired moves** to be replayed later without connecting
+the machine or regenerating an ideal trajectory. Preserve:
+
+- Original uploaded command samples and manifest, run/device/firmware identity,
+  hashes, actual command/capture start ticks, and segment boundaries.
+- Raw acquired encoder, effort, status, and available actual-output streams,
+  including aperture offsets, validity/fault flags, and synchronization metadata.
+- Calibration, coordinate signs/ratios/zeros, units, all filtering/resampling steps,
+  and the model/version/parameters used for each replay.
+- Replay initial state and how it was obtained (measured position, estimated
+  velocity, preload/gap state where relevant). Preserve pre-roll to support that
+  estimate; do not assume an axis began at rest or at centered backlash.
+
+Two distinct replay modes MUST be identified, not conflated:
+
+1. **Mechanical replay:** drive the fitted mechanical model with the recorded
+   measured effort versus time. This tests the mechanics without asking an
+   amplifier/controller model to reproduce the actual effort. This is the current
+   two-body validator's approach, presently limited to validation segments.
+2. **End-to-end replay:** drive a supplied controller/drive/actuator model with
+   the recorded command versus time. This tests the whole modeled path. It
+   requires those additional models/configurations; missing drive behavior MUST
+   NOT be silently replaced with measured effort and called end-to-end validation.
+
+Replay MUST support selecting any recorded segment or a continuous full run,
+including training moves. Reports MUST mark training replays as in-sample, not
+independent validation. For continuous replay, carry state through transitions;
+never reset from measured positions at each sample or segment. A deliberately
+isolated segment may initialize once from its measured start state, with this
+choice disclosed. Gap/preload settling during pre-roll is part of the replay.
+
+Plot measured and simulated motor/load positions on the **same time axes**, with
+an aligned error panel (`simulated - measured`) for each measured body. Include
+segment labels and units. Export the aligned values/error CSV and RMSE/maximum
+absolute error per body and segment. Preserve the original acquisition timebase;
+simulation may use smaller internal steps, then evaluate at measurement aperture
+times. No fitted time shifting, amplitude scaling, or hidden initial-state
+adjustments on held-out data. If a delay is calibrated from training data, record
+it explicitly and freeze it for validation.
+
+Sampled encoder counts preserve sampled motion, not all intermediate edge times.
+Similarly, sampled actual-output counts do not uniquely reconstruct pulse timing
+between samples. Mechanical effort replay is limited by recorded effort bandwidth.
+End-to-end replay MUST state whether it uses actual-output capture or uploaded
+commands plus the device's declared scheduling/quantization rules, and report the
+resulting timing uncertainty. If exact output-edge replay is needed, negotiate
+an event-timestamp capture extension; do not claim it from sampled counts alone.
+Dropped samples, unknown effort, or unknown timing MUST result in a diagnostic
+rather than an apparently exact comparison.
+
+The bundle and comparison requirements are host-side deliverables. Firmware only
+needs to expose the agreed command/acquisition data and metadata; it does not fit
+models, run simulations, or draw plots. Full-run replay and bundle packaging are
+requirements here, not yet implemented by the current validation-only prototype.
+
 ## Acceptance checks before connecting a machine
 
 Firmware and host implementations should share golden vectors for framing/CRC,
