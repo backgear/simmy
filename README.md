@@ -242,14 +242,19 @@ the ideal sine-law motor is not a complete microstep-accuracy model.
 
 ```
 make examples
-python3 examples/run_stepper_sweep.py velocity --jobs 8 --output build/stepper_sweep.csv
+python3 examples/run_stepper_sweep.py velocity --output build/stepper_sweep.csv
 python3 examples/plot_stepper_sweep.py
 ```
 
 This runs the same six cases at 121 logarithmically spaced speeds from
 .01 to 1.2 rad/s (.0955 to 11.46 rpm). The optional Python stdlib runner
 executes independent C `--point` trials concurrently, preserving speed
-order in the CSV. Eight workers took about 20 seconds on the development
+order in the CSV. These are **offline, fixed-timestep simulations**, not
+real-time tasks: each outer tick advances simulated time by `1/HZ` seconds
+with fixed mechanical substeps. There is no wall-clock pacing, deadline,
+or scheduling-dependent `dt`, and no synchronization barrier between
+trials. CPU contention changes time to completion, not simulated physics.
+Eight workers took about 20 seconds on the development
 machine, versus about two minutes for the C-only serial alternative:
 `build/stepper_velocity --sweep > build/stepper_sweep.csv`.
 Each point is an **independent trial initialized at
@@ -323,7 +328,7 @@ actual phase-current limits. No command smoothing is included.
 
 ```
 make examples
-python3 examples/run_stepper_sweep.py compensation --jobs 8 --output build/stepper_compensation_sweep.csv
+python3 examples/run_stepper_sweep.py compensation --output build/stepper_compensation_sweep.csv
 build/stepper_compensation --trace detent 1.107971 > build/stepper_compensation_detent_trace.csv
 build/stepper_compensation --trace microsteps .0698 > build/stepper_compensation_microsteps_trace.csv
 build/stepper_compensation --trace combined .2 > build/stepper_compensation_combined_trace.csv
@@ -331,9 +336,10 @@ python3 examples/plot_stepper_compensation.py build docs/plots
 ```
 
 The 61-speed, three-scenario, four-policy sweep takes about 22 seconds
-with eight workers on the development host, versus 142 seconds serially.
-The runner uses only the Python standard library, defaults to at most
-eight affinity-available CPUs, and supports `--jobs`, `--points`,
+with eight workers on the development host, versus 142 seconds serially;
+the default below completed it in 19.3 seconds with identical output.
+The runner uses only the Python standard library, defaults to 256 workers
+(capped only by the number of trials, not CPU count), and supports `--jobs`, `--points`,
 `--min-speed`, `--max-speed`, and `--hz`. `--output` replaces a file
 atomically only after all trials succeed. Parallel results were byte-for-byte
 identical to both archived serial sweeps. Optional tooling tests run with

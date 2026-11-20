@@ -16,6 +16,15 @@ spec.loader.exec_module(runner)
 
 
 class SweepRunnerTests(unittest.TestCase):
+    def test_default_allows_overcommit(self):
+        self.assertEqual(runner.default_jobs(), 256)
+
+    def test_workers_are_capped_by_trials_not_machine_size(self):
+        with patch.object(runner, "ThreadPoolExecutor", wraps=runner.ThreadPoolExecutor) as pool, \
+             patch.object(runner, "point", return_value=(["value"], [["1"]])):
+            runner.run_sweep(Path("unused"), [.1, .2], 10000, 512)
+        pool.assert_called_once_with(max_workers=2)
+
     def test_parallel_execution_keeps_speed_order(self):
         second_finished = threading.Event()
         completed = []

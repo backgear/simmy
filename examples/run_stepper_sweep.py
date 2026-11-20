@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Run independent C --point trials concurrently, merging CSV in speed order.
 Python standard library only; the C-only serial --sweep remains available.
+Trials advance fixed simulated-time steps, not wall-clock/realtime steps.
+There is no cross-trial lockstep barrier; OS scheduling changes runtime,
+not simulated dt. Default: 256 workers, limited by available trials.
 No simulation logic lives here. Example:
-  python3 examples/run_stepper_sweep.py compensation --jobs 8 \
+  python3 examples/run_stepper_sweep.py compensation \
       --output build/stepper_compensation_sweep.csv
 """
 import argparse
@@ -18,8 +21,9 @@ import tempfile
 
 
 def default_jobs():
-    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
-    return min(8, cpus)
+    # Trials have small memory footprints and variable durations. Permit
+    # overcommit instead of imposing a CPU-count ceiling; --jobs overrides.
+    return 256
 
 
 def point(binary, speed, hz):
@@ -39,7 +43,7 @@ def point(binary, speed, hz):
 def run_sweep(binary, speeds, hz, jobs):
     """Return complete validated output, never a partial merged CSV."""
     ordered = [None] * len(speeds)
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
+    with ThreadPoolExecutor(max_workers=min(jobs, len(speeds))) as pool:
         futures = {pool.submit(point, binary, speed, hz): i for i, speed in enumerate(speeds)}
         try:
             for future in as_completed(futures):
@@ -76,7 +80,8 @@ def write_atomic(path, text):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("experiment", choices=("velocity", "compensation"))
-    parser.add_argument("--jobs", type=int, default=default_jobs())
+    parser.add_argument("--jobs", type=int, default=default_jobs(),
+                        help="default: 256, capped by number of trials")
     parser.add_argument("--points", type=int, help="default: velocity 121, compensation 61")
     parser.add_argument("--min-speed", type=float, default=.01)
     parser.add_argument("--max-speed", type=float, default=1.2)
@@ -88,8 +93,8 @@ def main():
     if not (math.isfinite(args.min_speed) and math.isfinite(args.max_speed) and
             .005 <= args.min_speed <= args.max_speed <= 2):
         parser.error("speeds must be finite and .005 <= min <= max <= 2 rad/s")
-    if not (2 <= points <= 1000 and 1 <= args.jobs <= 256 and 1000 <= args.hz <= 100000):
-        parser.error("points: 2..1000; jobs: 1..256; hz: 1000..100000")
+    if not (2 <= points <= 1000 and args.jobs >= 1 and 1000 <= args.hz <= 100000):
+        parser.error("points: 2..1000; jobs: >=1; hz: 1000..100000")
     binary = args.binary or (Path(__file__).resolve().parents[1] / "build" / f"stepper_{args.experiment}")
     binary = binary.resolve()
     speeds = [args.min_speed * math.pow(args.max_speed / args.min_speed, i / (points-1))

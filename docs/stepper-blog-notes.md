@@ -270,14 +270,16 @@ parallel runner uses just Python's standard library):
 ```sh
 make test examples
 
-# Baselines: about 20 seconds for the sweep with eight workers.
+# Baselines: default concurrency permits all 121 independent trials.
+# Previously measured: about 20 seconds with --jobs 8.
 build/stepper_velocity > build/stepper_velocity.csv
-python3 examples/run_stepper_sweep.py velocity --jobs 8 --output build/stepper_sweep.csv
+python3 examples/run_stepper_sweep.py velocity --output build/stepper_sweep.csv
 python3 examples/plot_stepper.py build/stepper_velocity.csv docs/plots/stepper
 python3 examples/plot_stepper_sweep.py build/stepper_sweep.csv docs/plots/stepper_sweep
 
-# Compensation: about 22 seconds with eight workers.
-python3 examples/run_stepper_sweep.py compensation --jobs 8 --output build/stepper_compensation_sweep.csv
+# Compensation: default concurrency permits all 61 independent trials.
+# Previously measured: about 22 seconds with --jobs 8.
+python3 examples/run_stepper_sweep.py compensation --output build/stepper_compensation_sweep.csv
 build/stepper_compensation --trace detent 1.107971 > build/stepper_compensation_detent_trace.csv
 build/stepper_compensation --trace microsteps .0698 > build/stepper_compensation_microsteps_trace.csv
 build/stepper_compensation --trace combined .2 > build/stepper_compensation_combined_trace.csv
@@ -298,13 +300,27 @@ C processes, with no shared simulation state or Python GIL bottleneck.
 The runner merges completed trials into deterministic speed order and
 only publishes output after every trial succeeds. `--output` uses atomic
 replacement, preserving an existing CSV on failure. Set `--jobs` to suit
-the machine; the default is at most eight affinity-available CPUs.
+the machine; the default permits 256 workers, limited only by the number
+of trials rather than CPU count. With the default grids this launches up
+to 61 compensation or 121 baseline trials concurrently, deliberately
+allowing CPU overcommit because per-trial memory usage is small.
+
+These are **offline, fixed-timestep simulations**, not real-time tasks.
+Within a trial, each outer tick advances simulated time by `1/HZ`, and
+mechanical integration uses 20 fixed substeps. There is no sleep, deadline,
+wall-clock-derived timestep, or skipped integration step when a process
+is descheduled. Scheduling affects completion time only. In that sense
+each trial is deterministic/step-driven; there is **no cross-trial
+lockstep barrier** requiring one process to wait for another at tick N.
 
 On this development host the compensation sweep took 142 seconds serial
 versus 22 seconds with eight workers; baseline sweep 134 seconds versus
 20 seconds. Both parallel CSVs were **byte-for-byte identical** to the
-archived serial results. These timings are host-dependent, not performance
-guarantees. Seven optional `make test-tools` tests cover actual overlap
+archived serial results. With the new 256-worker default (61 independent
+trials available), the compensation sweep took 19.3 seconds, also with
+byte-for-byte identical output. These timings are host-dependent, not
+performance guarantees. Nine optional `make test-tools` tests cover the overcommit
+default, trial-count worker limit, actual overlap
 with out-of-order completion, deterministic merging, malformed/inconsistent
 CSV, worker failure, atomic output, and argument validation. The C-only
 physics suite does not acquire a Python dependency.
