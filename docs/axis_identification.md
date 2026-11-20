@@ -3,6 +3,11 @@
 Goal: identify enough of one axis to choose control bandwidth, diagnose ringing,
 and predict reversal/settling. Do not reconstruct every physical part.
 
+For the host/MCU boundary, see the [draft USB CDC device protocol](axis_device_protocol.md):
+timed command uploads, up to four encoder channels, analog effort capture,
+buffered/RLE retrieval, and safety/fault semantics. Firmware is supplied separately;
+the existing acquisition adapter does not yet implement this wire protocol.
+
 ## Instrumentation
 
 Minimum: synchronized motor position, measured actuator effort, applied command,
