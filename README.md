@@ -499,6 +499,16 @@ file describes a complete scenario.
   composes with a real external control loop, not just its own demo
   controller.
 
+## Single-axis identification prototype
+
+See [the characterization notes](docs/axis_identification.md) for a minimal
+sensor setup, excitation/validation moves, and the boundaries of a useful model.
+`examples/identify_axis.py` generates offline motion plans, delegates acquisition
+to an explicit hardware adapter, and fits a preliminary rigid-axis baseline from
+measured effort and position. A synthetic demo and Python tests exercise the
+workflow. This optional tool requires NumPy; it adds no C-library dependencies
+and is not a realtime controller or a complete compliant-chain fitter.
+
 ## License
 
 MIT, see `LICENSE`.
