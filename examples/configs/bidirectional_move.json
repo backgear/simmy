@@ -1,0 +1,17 @@
+{
+  "_comment": "Same motor->belt->screw->nut->table chain as three_mass_leadscrew.json, but with a larger nut backlash gap specifically so a direction reversal's dead-zone crossing is clearly visible rather than lasting only a couple of ticks. Representative ratios, not a measurement of any real machine.",
+  "bodies": [
+    {"inertia": 64, "friction": 0.02, "rippleAmplitude": 60, "ripplePeriodCounts": 20},
+    {"inertia": 12, "friction": 0.01},
+    {"inertia": 8, "friction": 0.01, "stictionLimit": 80, "coulombLevel": 50}
+  ],
+  "couplings": [
+    {"springK": 1.69, "springD": 5.0, "backlashGap": 0.1},
+    {"springK": 8.0, "springD": 0.5, "backlashGap": 8.0}
+  ],
+  "feedbackBody": 0,
+  "subSteps": 20,
+  "analogChain": [
+    {"type": "lag", "param0": 0.6}
+  ]
+}
