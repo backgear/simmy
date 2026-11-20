@@ -84,6 +84,10 @@ def read_measurements(path):
                 row[name] = float(row[name])
                 if not math.isfinite(row[name]):
                     raise ValueError(f'nonfinite {name}')
+        if 'load_position' in row:
+            row['load_position'] = float(row['load_position'])
+            if not math.isfinite(row['load_position']):
+                raise ValueError('nonfinite load_position')
         if not row['segment']:
             raise ValueError('empty segment')
     if any(b['time'] <= a['time'] for a, b in zip(rows, rows[1:])):
@@ -191,12 +195,16 @@ def main():
         p.add_argument('--effort', type=positive, default=.1)
         p.add_argument('--low', type=positive, default=1)
         p.add_argument('--high', type=positive, default=50)
+    sub.choices['demo'].add_argument('--model', choices=('rigid', 'two-body'), default='rigid')
     p = sub.add_parser('fit')
     p.add_argument('input', type=Path)
     p.add_argument('--window', type=positive, default=.02)
     p.add_argument('--min-speed', type=positive, default=1e-4,
                    help='exclude near-zero/reversing windows; position units per second')
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--model', choices=('rigid', 'two-body'), default='rigid')
+    p.add_argument('--max-gap', type=positive, help='required two-body half-gap search bound')
+    p.add_argument('--predictions', type=Path, help='held-out two-body trajectory CSV')
     p = sub.add_parser('capture')
     p.add_argument('--plan', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
@@ -207,8 +215,12 @@ def main():
             if args.high <= args.low or args.high >= args.hz/10:
                 raise ValueError('require low < high < hz/10')
             rows = make_plan(args.hz, args.duration, args.amplitude, args.effort, args.low, args.high)
-            write_csv(args.output, PLAN_FIELDS if args.action == 'plan' else MEASURE_FIELDS,
-                      rows if args.action == 'plan' else demo(rows))
+            if args.action == 'demo' and args.model == 'two-body':
+                from axis_compliance import demo_compliance
+                write_csv(args.output, MEASURE_FIELDS + ['load_position'], demo_compliance(rows))
+            else:
+                write_csv(args.output, PLAN_FIELDS if args.action == 'plan' else MEASURE_FIELDS,
+                          rows if args.action == 'plan' else demo(rows))
         elif args.action == 'capture':
             if args.output.exists():
                 raise ValueError('refusing to overwrite existing acquisition')
@@ -219,10 +231,20 @@ def main():
                             '--output', str(args.output.resolve())], check=True)
             read_measurements(args.output)
         else:
-            report = fit(read_measurements(args.input), args.window, args.min_speed)
+            if args.model == 'two-body':
+                if args.max_gap is None:
+                    raise ValueError('--max-gap is required for two-body fitting')
+                from axis_compliance import fit_compliance
+                report, predictions = fit_compliance(read_measurements(args.input), args.window, args.max_gap)
+                if args.predictions:
+                    write_csv(args.predictions, list(predictions[0]), predictions)
+            else:
+                if args.predictions:
+                    raise ValueError('--predictions requires --model two-body')
+                report = fit(read_measurements(args.input), args.window, args.min_speed)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
-    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+    except (ImportError, ValueError, OSError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f'error: {exc}\n')
 
 

@@ -504,10 +504,13 @@ file describes a complete scenario.
 See [the characterization notes](docs/axis_identification.md) for a minimal
 sensor setup, excitation/validation moves, and the boundaries of a useful model.
 `examples/identify_axis.py` generates offline motion plans, delegates acquisition
-to an explicit hardware adapter, and fits a preliminary rigid-axis baseline from
-measured effort and position. A synthetic demo and Python tests exercise the
-workflow. This optional tool requires NumPy; it adds no C-library dependencies
-and is not a realtime controller or a complete compliant-chain fitter.
+to an explicit hardware adapter, and fits a rigid baseline or a two-body
+compliance/backlash model from measured effort and position. The two-body fit
+uses motor and load sensors, profiles the backlash gap, and validates held-out
+motor/load trajectories. Synthetic demos and Python tests exercise the workflow;
+`examples/plot_axis_identification.py` plots the two-body results. NumPy is required,
+with optional SciPy for two-body fitting and Matplotlib for plots. These tools add
+no C-library dependencies and are not realtime controllers.
 
 ## License
 
