@@ -22,18 +22,32 @@ static const StepperScenario stepperScenarios[] = {
 };
 #define STEPPER_SCENARIOS (sizeof(stepperScenarios)/sizeof(stepperScenarios[0]))
 
+/* Experimental current-domain compensation using ideal body-0 feedback.
+ * A measured position-indexed torque table could replace this sine estimate.
+ * These are estimates supplied by the experiment, not access to plant torque. */
+typedef struct {
+  double detentEstimate, detentPhaseEstimate;
+  int detentCyclesEstimate;
+  double damping;             /* Nm/(rad/s), relative to target speed */
+  double torqueLimit;         /* absolute correction limit, Nm; >0 */
+  double phaseCurrentLimit;   /* absolute actual phase-current limit, A; >0 */
+} StepperCompensation;
+
 typedef struct {
   double meanSpeed, rmsError, acRms, peakToPeak;
   double maxAbsLoadAngle; /* UNWRAPPED; over settling AND measurement */
   double finalLoadAngle, reverseFraction;
+  double currentVectorRms, peakPhaseCurrent, correctionRms;
+  double torqueLimitFraction, currentLimitFraction;
   int samples;
 } StepperMetrics;
 
 /* Speed positive, hz>0, settling>=0, measurement>0. trace=NULL suppresses
  * time-series output. Each run starts at ideal loaded traveling equilibrium;
  * this tests sustained tracking, NOT acceleration/pull-in from rest. */
-static StepperMetrics StepperExperiment(const StepperScenario *scenario, double target,
-                                       int hz, double settling, double measurement, FILE *trace) {
+static StepperMetrics StepperExperimentControlled(const StepperScenario *scenario, double target,
+                                       int hz, double settling, double measurement, FILE *trace,
+                                       const StepperCompensation *compensation) {
   SimmyStepperParams motor = {.electricalCyclesPerRev=50, .torqueConstant=.4,
       .detentAmplitude=scenario->detent ? .012 : 0, .detentCyclesPerRev=200, .detentPhase=.3};
   SimmyStepperCurrentParams path = {0};
@@ -58,7 +72,8 @@ static StepperMetrics StepperExperiment(const StepperScenario *scenario, double 
   StepperMetrics result = {.samples=samples};
   double sum = 0, sumErrorSquared = 0, m2 = 0, mean = 0;
   double minimum = INFINITY, maximum = -INFINITY;
-  int reversed = 0, count = 0;
+  int reversed = 0, count = 0, torqueLimited = 0, currentLimited = 0;
+  double currentSquared = 0, correctionSquared = 0;
   for (int tick = 0; tick < warmTicks+samples; tick++) {
     double time = (double)tick/hz;
     double unwrappedPhi = scenario->microsteps
@@ -66,9 +81,32 @@ static StepperMetrics StepperExperiment(const StepperScenario *scenario, double 
     double phi = scenario->microsteps
         ? SimmyStepperMicrostepAngle(index, scenario->microsteps) : unwrappedPhi;
     double currents[2];
-    SimmyStepperCurrents(phi, 1, &path, currents);
     double theta = state.bodies[0].position/STEPPER_COUNTS_PER_RADIAN;
     double speed = state.bodies[0].velocity*hz/STEPPER_COUNTS_PER_RADIAN;
+    double correction = 0;
+    int torqueClipped = 0, currentClipped = 0;
+    if (!compensation) {
+      SimmyStepperCurrents(phi, 1, &path, currents);
+    } else {
+      correction = compensation->detentEstimate * sin(
+          compensation->detentCyclesEstimate*theta + compensation->detentPhaseEstimate)
+          - compensation->damping*(speed-target);
+      torqueClipped = fabs(correction) > compensation->torqueLimit;
+      correction = fmax(-compensation->torqueLimit, fmin(compensation->torqueLimit, correction));
+      /* Tangential rotor-frame current adds torque, not a direct mechanical
+       * force. It goes through the SAME DAC/gain/offset errors as base current.
+       * Feedback is ideal, instantaneous, motor-side; no encoder quantization. */
+      currents[0] = cos(phi) - correction/.4*sin(50*theta);
+      currents[1] = sin(phi) + correction/.4*cos(50*theta);
+      for (int phase = 0; phase < 2; phase++) {
+        if (path.quantizeStep[phase] > 0)
+          currents[phase] = round(currents[phase]/path.quantizeStep[phase])*path.quantizeStep[phase];
+        currents[phase] = currents[phase]*(1+path.gainError[phase]) + path.offset[phase];
+        currentClipped |= fabs(currents[phase]) > compensation->phaseCurrentLimit;
+        currents[phase] = fmax(-compensation->phaseCurrentLimit,
+                              fmin(compensation->phaseCurrentLimit, currents[phase]));
+      }
+    }
     double loadAngle = unwrappedPhi-50*theta;
     result.maxAbsLoadAngle = fmax(result.maxAbsLoadAngle, fabs(loadAngle));
     result.finalLoadAngle = loadAngle;
@@ -77,6 +115,11 @@ static StepperMetrics StepperExperiment(const StepperScenario *scenario, double 
         fprintf(trace, "%s,%.7f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n", scenario->name, time,
                 theta, speed, remainder(loadAngle, 2*STEPPER_PI), currents[0], currents[1],
                 SimmyStepperTorque(&motor, theta, currents[0], currents[1]));
+      currentSquared += currents[0]*currents[0] + currents[1]*currents[1];
+      result.peakPhaseCurrent = fmax(result.peakPhaseCurrent, fmax(fabs(currents[0]), fabs(currents[1])));
+      correctionSquared += correction*correction;
+      torqueLimited += torqueClipped;
+      currentLimited += currentClipped;
       sum += speed;
       sumErrorSquared += (speed-target)*(speed-target);
       /* Welford variance avoids cancellation for the almost-ideal case. */
@@ -96,7 +139,16 @@ static StepperMetrics StepperExperiment(const StepperScenario *scenario, double 
   result.acRms = sqrt(fmax(0, m2/samples));
   result.peakToPeak = maximum-minimum;
   result.reverseFraction = (double)reversed/samples;
+  result.currentVectorRms = sqrt(currentSquared/samples);
+  result.correctionRms = sqrt(correctionSquared/samples);
+  result.torqueLimitFraction = (double)torqueLimited/samples;
+  result.currentLimitFraction = (double)currentLimited/samples;
   return result;
+}
+
+static inline StepperMetrics StepperExperiment(const StepperScenario *scenario, double target,
+                                       int hz, double settling, double measurement, FILE *trace) {
+  return StepperExperimentControlled(scenario, target, hz, settling, measurement, trace, NULL);
 }
 
 /* At least 2 seconds AND four complete commanded electrical cycles.

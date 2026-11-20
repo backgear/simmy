@@ -9,7 +9,7 @@ LIB := $(BUILD)/libsimmy.a
 
 ANALOG_SERVO_DIR := ../analog-servo
 
-.PHONY: all lib test examples integration clean
+.PHONY: all lib test test-tools examples integration clean
 
 all: lib test examples
 
@@ -29,12 +29,19 @@ test: $(LIB)
 	$(BUILD)/test_stepper
 	$(CC) $(CFLAGS) tests/test_stepper_sweep.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_sweep
 	$(BUILD)/test_stepper_sweep
+	$(CC) $(CFLAGS) tests/test_stepper_compensation.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_compensation
+	$(BUILD)/test_stepper_compensation
+
+# Optional Python stdlib tooling tests; not a dependency of the C-only suite.
+test-tools:
+	python3 -m unittest discover -s tests -p 'test_*runner.py'
 
 examples: $(LIB)
 	$(CC) $(CFLAGS) examples/basic_two_mass.c $(LIB) $(LDLIBS) -o $(BUILD)/basic_two_mass
 	$(CC) $(CFLAGS) examples/three_mass_leadscrew.c $(LIB) $(LDLIBS) -o $(BUILD)/three_mass_leadscrew
 	$(CC) $(CFLAGS) examples/bidirectional_move.c $(LIB) $(LDLIBS) -o $(BUILD)/bidirectional_move
 	$(CC) $(CFLAGS) examples/stepper_velocity.c $(LIB) $(LDLIBS) -o $(BUILD)/stepper_velocity
+	$(CC) $(CFLAGS) examples/stepper_compensation.c $(LIB) $(LDLIBS) -o $(BUILD)/stepper_compensation
 	@echo "Built examples in $(BUILD)/ -- run each from the repo root"
 
 # Optional: only builds when the analog-servo sibling repo is present.

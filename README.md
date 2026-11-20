@@ -242,13 +242,17 @@ the ideal sine-law motor is not a complete microstep-accuracy model.
 
 ```
 make examples
-build/stepper_velocity --sweep > build/stepper_sweep.csv
+python3 examples/run_stepper_sweep.py velocity --jobs 8 --output build/stepper_sweep.csv
 python3 examples/plot_stepper_sweep.py
 ```
 
 This runs the same six cases at 121 logarithmically spaced speeds from
-.01 to 1.2 rad/s (.0955 to 11.46 rpm). It takes roughly two minutes on the
-development machine. Each point is an **independent trial initialized at
+.01 to 1.2 rad/s (.0955 to 11.46 rpm). The optional Python stdlib runner
+executes independent C `--point` trials concurrently, preserving speed
+order in the CSV. Eight workers took about 20 seconds on the development
+machine, versus about two minutes for the C-only serial alternative:
+`build/stepper_velocity --sweep > build/stepper_sweep.csv`.
+Each point is an **independent trial initialized at
 ideal loaded traveling equilibrium**, not an acceleration ramp or a
 pull-in/pull-out test. All use two seconds of settling, followed by at
 least two seconds AND four complete commanded electrical cycles of
@@ -307,6 +311,49 @@ example, at 1.108 rad/s the 64-microstep RMS error falls from .183% to
 fine jagged features as calibrated physical effects. Resolving pulse
 events inside a tick is a future numerical improvement; mechanical
 substeps alone do not fix pulse-time quantization.
+
+### Compensation experiment and blog notes
+
+`examples/stepper_compensation.c` compares no correction, exact
+position-indexed detent feedforward, motor-side active damping, and both.
+Corrections modify phase-current references **before** the same DAC and
+current-path errors; they are not injected mechanical forces. The fixture
+uses ideal rotor feedback, a +/- .2 Nm correction limit, and +/- 1.5 A
+actual phase-current limits. No command smoothing is included.
+
+```
+make examples
+python3 examples/run_stepper_sweep.py compensation --jobs 8 --output build/stepper_compensation_sweep.csv
+build/stepper_compensation --trace detent 1.107971 > build/stepper_compensation_detent_trace.csv
+build/stepper_compensation --trace microsteps .0698 > build/stepper_compensation_microsteps_trace.csv
+build/stepper_compensation --trace combined .2 > build/stepper_compensation_combined_trace.csv
+python3 examples/plot_stepper_compensation.py build docs/plots
+```
+
+The 61-speed, three-scenario, four-policy sweep takes about 22 seconds
+with eight workers on the development host, versus 142 seconds serially.
+The runner uses only the Python standard library, defaults to at most
+eight affinity-available CPUs, and supports `--jobs`, `--points`,
+`--min-speed`, `--max-speed`, and `--hz`. `--output` replaces a file
+atomically only after all trials succeed. Parallel results were byte-for-byte
+identical to both archived serial sweeps. Optional tooling tests run with
+`make test-tools`; `make test` remains C-only.
+
+The C-only serial alternative is `build/stepper_compensation --sweep`.
+`--point SPEED [HZ]` runs all scenarios and policies at one speed;
+`--sweep [HZ]` sets the outer update rate.
+
+See **[blog working notes](docs/stepper-blog-notes.md)** for equations,
+results, caveats, captions, and complete reproduction commands. Selected
+baseline and compensation figures are retained as PNG/SVG in `docs/plots/`,
+with summary data in `docs/data/`; unlike `build/`, these survive cleanup.
+
+The experiment illustrates why a detent table does not fix microstep
+resonance, and why even a tenfold RMS improvement can leave backward
+motion. It also explicitly separates commanded magnetic-field angle from
+mechanical rotor angle: the model never assigns rotor position from the
+command. Ideal collocated feedback and exact detent knowledge remain
+best-case assumptions, not claims about production control performance.
 
 ## Controller convention
 
