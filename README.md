@@ -56,16 +56,42 @@ files" below).
 - Cogging and commutation ripple are both represented by the same plain
   sinusoidal position-dependent term (`rippleAmplitude`/
   `ripplePeriodCounts`) -- not a magnetic/commutation model, a stand-in,
-  with period/amplitude picking which real effect it represents.
+  with period/amplitude picking which real effect it represents. This is
+  good enough for plain detent/cogging torque (roughly sinusoidal at the
+  tooth-count period, present even unpowered) but **not yet sufficient
+  for microstepping 2-phase steppers specifically** -- real microstep
+  position error comes from torque being a function of TWO independently
+  commanded phase currents and electrical angle (`torque = Kt*(Ia*sin(θ)
+  - Ib*cos(θ))`, plus non-ideal per-phase torque-vs-angle shape), not one
+  scalar ripple added after the fact. See "Future work" below.
 - The stiction model is the textbook "decide before integrating whether
   the driving force can overcome static friction" formulation -- it
   avoids the classic bug where a naive post-hoc check makes velocity
   chatter around zero, but it's not a claim about any particular real
   friction surface.
+- **Off-axis spring effects are explicitly out of scope** -- e.g. a
+  preload spring or misalignment that would cause a position-dependent
+  NORMAL force and hence a continuously-varying friction profile. This
+  is distinct from `frictionBump*` (a flat localized patch, not a
+  smoothly spring-coupled effect) and is a deliberate exclusion, not a
+  gap to fill later.
 - Not yet modeled (future work): **endstops/hard limits** -- position
   thresholds that produce a contact event (not just a spring, a
   one-sided hard stop), for studying home-overshoot at different
   approach velocities and deceleration/smoothing profiles.
+- Not yet modeled (future work): **two-phase stepper torque production**
+  -- a dedicated body/torque model with two current inputs (each
+  through its own analog chain -- `SIMMY_STAGE_QUANTIZE` is exactly a
+  microstep current DAC's resolution), an electrical-angle relationship
+  tied to mechanical position via pole count, and a combining torque
+  equation (optionally with harmonic distortion terms for non-ideal
+  per-phase torque shape) -- needed to actually simulate microstepping
+  position error, which the existing single-sinusoid ripple cannot
+  represent (see above).
+- Test suite is currently plain `assert()`-based; GUnit (C++ on top of
+  Google Test) was suggested as a possible upgrade for a future cycle --
+  would add a C++ toolchain + Google Test dependency, which cuts against
+  the "C compiler + libm only" promise above, so not adopted yet.
 
 ## The mechanical body chain
 
