@@ -79,9 +79,11 @@ void SimmyChainInit(SimmyChainState *state, const SimmyChainParams *params) {
   }
 }
 
-void SimmyChainStep(SimmyChainState *state, const SimmyChainParams *params, double force) {
+static void ChainStep(SimmyChainState *state, const SimmyChainParams *params, double force,
+                      const SimmyStepperParams *motor, double radiansPerCount,
+                      double forcePerNm, double currentA, double currentB) {
   int n = params->bodyCount;
-  if (n <= 1) {
+  if (n <= 1 && !motor) {
     BodyMechanicalStep(&state->bodies[0], &params->bodies[0], force, 1.0);
     return;
   }
@@ -91,6 +93,10 @@ void SimmyChainStep(SimmyChainState *state, const SimmyChainParams *params, doub
   double couplingForce[SIMMY_MAX_BODIES - 1];
 
   for (int step = 0; step < subSteps; step++) {
+    if (motor) {
+      force = forcePerNm * SimmyStepperTorque(motor,
+          state->bodies[0].position * radiansPerCount, currentA, currentB);
+    }
     for (int i = 0; i < n - 1; i++) {
       double rel = CouplingRelativeDisplacement(state->bodies[i].position, state->bodies[i + 1].position,
                                                  params->couplings[i].backlashGap);
@@ -99,12 +105,46 @@ void SimmyChainStep(SimmyChainState *state, const SimmyChainParams *params, doub
     }
     for (int i = 0; i < n; i++) {
       double netForce;
-      if (i == 0) netForce = force - couplingForce[0];
+      if (n == 1) netForce = force;
+      else if (i == 0) netForce = force - couplingForce[0];
       else if (i == n - 1) netForce = couplingForce[n - 2];
       else netForce = couplingForce[i - 1] - couplingForce[i];
       BodyMechanicalStep(&state->bodies[i], &params->bodies[i], netForce, dt);
     }
   }
+}
+
+void SimmyChainStep(SimmyChainState *state, const SimmyChainParams *params, double force) {
+  ChainStep(state, params, force, NULL, 0, 0, 0, 0);
+}
+
+void SimmyStepperChainStep(SimmyChainState *state, const SimmyChainParams *params,
+                           const SimmyStepperParams *motor, double radiansPerCount,
+                           double forcePerNm, double currentA, double currentB) {
+  ChainStep(state, params, 0, motor, radiansPerCount, forcePerNm, currentA, currentB);
+}
+
+void SimmyStepperCurrents(double commandAngle, double peakCurrent,
+                         const SimmyStepperCurrentParams *params, double currents[2]) {
+  double ideal[2] = {peakCurrent * cos(commandAngle), peakCurrent * sin(commandAngle)};
+  for (int i = 0; i < 2; i++) {
+    double value = ideal[i];
+    if (params->quantizeStep[i] > 0)
+      value = round(value / params->quantizeStep[i]) * params->quantizeStep[i];
+    currents[i] = value * (1 + params->gainError[i]) + params->offset[i];
+  }
+}
+
+double SimmyStepperMicrostepAngle(int64_t index, int microstepsPerFullStep) {
+  int64_t cycle = 4LL * microstepsPerFullStep;
+  return SIMMY_TWO_PI * (double)(index % cycle) / (double)cycle;
+}
+
+double SimmyStepperTorque(const SimmyStepperParams *params, double rotorAngle,
+                          double currentA, double currentB) {
+  double angle = params->electricalCyclesPerRev * rotorAngle + params->electricalOffset;
+  return params->torqueConstant * (-currentA * sin(angle) + currentB * cos(angle))
+      - params->detentAmplitude * sin(params->detentCyclesPerRev * rotorAngle + params->detentPhase);
 }
 
 int32_t SimmyChainFeedbackPositionCounts(const SimmyChainState *state, const SimmyChainParams *params) {

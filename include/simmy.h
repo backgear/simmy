@@ -147,6 +147,48 @@ int32_t SimmyChainFeedbackVelocityCounts(const SimmyChainState *state, const Sim
 int32_t SimmyChainBodyPositionCounts(const SimmyChainState *state, int bodyIndex);
 int32_t SimmyChainBodyVelocityCounts(const SimmyChainState *state, int bodyIndex);
 
+/* ==================== Two-phase stepper ============================== */
+
+/* Low-speed current-driven hybrid stepper. All angles are radians.
+ * Positive torque: Kt*(-Ia*sin(thetaE) + Ib*cos(thetaE)). Thus currents
+ * (I*cos(phi), I*sin(phi)) attract the rotor toward thetaE == phi.
+ * No winding dynamics, saturation, or phase-torque harmonics yet. */
+typedef struct {
+  int electricalCyclesPerRev;   /* e.g. 50 for a 200-full-step/rev motor; >0 */
+  double electricalOffset;      /* thetaE = cycles*mechanicalAngle + offset */
+  double torqueConstant;        /* Nm/A; vector current amplitude, NOT per-phase RMS */
+  double detentAmplitude;       /* Nm; 0 disables */
+  int detentCyclesPerRev;       /* independently configurable; >0 if enabled */
+  double detentPhase;           /* torque = -amplitude*sin(cycles*angle + phase) */
+} SimmyStepperParams;
+
+typedef struct {
+  double gainError[2];          /* fractional: 0 is ideal, .02 is +2% */
+  double offset[2];             /* A, added after gain */
+  double quantizeStep[2];       /* A/LSB, 0 disables; quantize BEFORE gain/offset */
+} SimmyStepperCurrentParams;
+
+/* Pure functions: no hidden command or rotor state. Current errors model
+ * static DAC/current-regulator imperfections; optional dynamics can be
+ * composed afterward using two independent analog chains. */
+void SimmyStepperCurrents(double commandAngle, double peakCurrent,
+                         const SimmyStepperCurrentParams *params, double currents[2]);
+/* Signed step/dir index, M microsteps/full step (>0). Returns wrapped
+ * electrical angle in (-2*pi, 2*pi); wrapping preserves reversal. */
+double SimmyStepperMicrostepAngle(int64_t index, int microstepsPerFullStep);
+double SimmyStepperTorque(const SimmyStepperParams *params, double rotorAngle,
+                          double currentA, double currentB);
+
+/* Advance one chain tick with phase currents held constant, reevaluating
+ * torque from body 0 position at EVERY substep, including a one-body chain.
+ * Uses params->subSteps (0 => 20). radiansPerCount and forcePerNm must be
+ * positive and explicitly map the chain's abstract units to motor units.
+ * Does not add electrical dynamics or modify any command/current state.
+ * Disable body-0 ripple if it would double-count the same detent torque. */
+void SimmyStepperChainStep(SimmyChainState *state, const SimmyChainParams *params,
+                           const SimmyStepperParams *motor, double radiansPerCount,
+                           double forcePerNm, double currentA, double currentB);
+
 /* ==================== Analog signal chain ============================ */
 
 /* A composable "train of analog type values" standing in for a real

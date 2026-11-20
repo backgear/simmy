@@ -57,13 +57,10 @@ files" below).
   sinusoidal position-dependent term (`rippleAmplitude`/
   `ripplePeriodCounts`) -- not a magnetic/commutation model, a stand-in,
   with period/amplitude picking which real effect it represents. This is
-  good enough for plain detent/cogging torque (roughly sinusoidal at the
-  tooth-count period, present even unpowered) but **not yet sufficient
-  for microstepping 2-phase steppers specifically** -- real microstep
-  position error comes from torque being a function of TWO independently
-  commanded phase currents and electrical angle (`torque = Kt*(Ia*sin(θ)
-  - Ib*cos(θ))`, plus non-ideal per-phase torque-vs-angle shape), not one
-  scalar ripple added after the fact. See "Future work" below.
+  useful as a simple position-only disturbance, but it cannot represent
+  two-phase stepper torque production. The dedicated stepper model below
+  combines two phase currents with rotor electrical angle; use it for
+  microstepping rather than treating all motor errors as additive ripple.
 - The stiction model is the textbook "decide before integrating whether
   the driving force can overcome static friction" formulation -- it
   avoids the classic bug where a naive post-hoc check makes velocity
@@ -79,15 +76,10 @@ files" below).
   thresholds that produce a contact event (not just a spring, a
   one-sided hard stop), for studying home-overshoot at different
   approach velocities and deceleration/smoothing profiles.
-- Not yet modeled (future work): **two-phase stepper torque production**
-  -- a dedicated body/torque model with two current inputs (each
-  through its own analog chain -- `SIMMY_STAGE_QUANTIZE` is exactly a
-  microstep current DAC's resolution), an electrical-angle relationship
-  tied to mechanical position via pole count, and a combining torque
-  equation (optionally with harmonic distortion terms for non-ideal
-  per-phase torque shape) -- needed to actually simulate microstepping
-  position error, which the existing single-sinusoid ripple cannot
-  represent (see above).
+- The stepper model is **low-speed and current-driven**, not a winding or
+  chopper simulation. Winding inductance, back-EMF, voltage limits,
+  saturation, and non-sinusoidal per-phase torque shapes remain future
+  work. It cannot predict the high-speed torque envelope.
 - Test suite is currently plain `assert()`-based; GUnit (C++ on top of
   Google Test) was suggested as a possible upgrade for a future cycle --
   would add a C++ toolchain + Google Test dependency, which cuts against
@@ -136,6 +128,185 @@ compose whatever path a given drive's own signal chain actually has.
 This is why mechanical bodies have no `ampAlpha`-style field of their
 own: electrical/analog character lives here, separate from mechanical
 properties.
+
+## Two-phase stepper: velocity-ripple milestone
+
+The first stepper model targets disturbances to constant velocity. It
+provides three independently composable parts:
+
+- `SimmyStepperMicrostepAngle(index, M)`: signed step/dir index to
+  electrical command angle, M microsteps per full step. Four full steps
+  make one electrical revolution. The angle is wrapped, not the rotor.
+- `SimmyStepperCurrents(phi, peakCurrent, &path, currents)`: sine/cosine
+  reference currents with independently disableable per-phase DAC
+  quantization, fractional gain errors, and additive offsets. Zeroed
+  `SimmyStepperCurrentParams` is ideal. Quantization precedes gain/offset;
+  there is no implicit current clamp. Two existing analog chains may be
+  added afterward for approximate per-phase dynamics/noise.
+- `SimmyStepperTorque(&motor, theta, Ia, Ib)`: torque in Nm from actual
+  phase currents (A) and mechanical rotor angle (radians):
+
+```
+thetaE = electricalCyclesPerRev * theta + electricalOffset
+torque = Kt * (-Ia*sin(thetaE) + Ib*cos(thetaE))
+         - detentAmplitude * sin(detentCyclesPerRev*theta + detentPhase)
+```
+
+For currents `(I*cos(phi), I*sin(phi))`, the powered term is
+`Kt*I*sin(phi-thetaE)`. Positive displacement from alignment produces a
+restoring torque. A conventional 1.8-degree motor has 50 electrical
+cycles/rev, not 200. `I` is vector peak current, not per-phase RMS;
+datasheet holding-torque/current conventions need checking before fitting
+`Kt`. Detent periodicity is separate and must be specified, not inferred
+from the full-step count. Detent persists with zero actual currents;
+phase-current errors need not.
+
+`SimmyStepperChainStep` applies torque to body 0 and reevaluates it from
+rotor position at **every mechanical substep**, even for a one-body chain.
+Currents are held constant over the outer tick. It uses `subSteps` (zero
+means 20); the original `SimmyChainStep` behavior is unchanged. Do not
+also enable body ripple for the same detent effect.
+
+### Units and numerical resolution
+
+The motor uses SI units; the chain still uses counts/tick. Supply explicit
+`radiansPerCount` and `forcePerNm` conversion factors. For example, with
+`C` counts/radian, tick duration `dt` seconds, and chain force unit Nm
+(`forcePerNm=1`):
+
+```
+position = C * theta            velocity = C * dt * omega
+body.inertia = J / (C * dt^2)   body.friction = B / (C * dt)
+radiansPerCount = 1 / C         body.gravityBias = load torque in Nm
+```
+
+Here `J` is kg m² and `B` is Nm/(rad/s). Couplings likewise need conversion
+if starting from SI parameters. The chain's existing stiction velocity
+threshold is in counts/tick, not rad/s; choose the scale deliberately.
+
+Parameters follow the library's caller-validates convention: positive
+inertia, positive conversion factors, positive electrical cycle count,
+and positive M for the microstep-angle helper. Disabled current
+quantization uses step zero. No automatic timestep selection is provided.
+Resolve both magnetic/mechanical resonance **and command pulse timing**;
+mechanical substeps cannot recover pulse edges hidden inside an outer
+tick. Check convergence when changing tick rate or stiffness.
+
+### Reproduce the plots
+
+```
+make test examples
+build/stepper_velocity > build/stepper_velocity.csv
+python3 examples/plot_stepper.py build/stepper_velocity.csv build/stepper
+```
+
+Only plotting requires Python, NumPy, and Matplotlib. Outputs are
+`build/stepper_velocity.{png,svg}` and `build/stepper_spectrum.{png,svg}`;
+the CSV includes position, velocity, load angle, actual currents, and torque.
+
+The example compares continuous ideal commands, 16/64 microsteps per full
+step, detent only, current errors only, and combined disturbances. It uses
+an illustrative 200-full-step/rev motor, 1 A vector current, Kt=0.4 Nm/A,
+J=4e-4 kg m² including reflected load, B=.008 Nm/(rad/s), .03 Nm load,
+and .2 rad/s (1.91 rpm) target. Detent amplitude is .012 Nm at 200
+cycles/rev. Current errors are +3%/-3% gain, +.01/-.015 A offset, and
+1/31 A DAC increments. There is **no velocity controller** in this example.
+
+Over the 2–4 s measurement window, RMS velocity error relative to target
+is approximately:
+
+| Scenario | RMS error / target |
+|---|---:|
+| Continuous ideal | 0.004% |
+| 16 microsteps | 20.45% |
+| 64 microsteps | 3.04% |
+| Detent only, continuous command | 8.83% |
+| Current errors only, continuous command | 6.08% |
+| Combined, 16 microsteps | 59.17% |
+
+The combined case briefly reverses despite positive average speed; it is
+not a small additive ripple. These numbers describe this lightly damped
+illustrative setup, **not typical motor performance**. Halving the outer
+tick from 100 to 50 microseconds changes combined RMS error from 59.17%
+to 59.15%; the ideal residual also shrinks. Automated tests cover the
+ripple comparisons and convergence, torque identities/sign/periodicity,
+current errors, detent with zero current, signed microstep commands,
+loaded equilibrium, friction breakaway, explicit unit conversion, and
+one-/two-body substep convergence.
+
+Stepper parameters currently use the C API, not JSON configuration.
+Non-sinusoidal phase torque and compensation experiments are next steps;
+the ideal sine-law motor is not a complete microstep-accuracy model.
+
+### Speed sweep and resonance
+
+```
+make examples
+build/stepper_velocity --sweep > build/stepper_sweep.csv
+python3 examples/plot_stepper_sweep.py
+```
+
+This runs the same six cases at 121 logarithmically spaced speeds from
+.01 to 1.2 rad/s (.0955 to 11.46 rpm). It takes roughly two minutes on the
+development machine. Each point is an **independent trial initialized at
+ideal loaded traveling equilibrium**, not an acceleration ramp or a
+pull-in/pull-out test. All use two seconds of settling, followed by at
+least two seconds AND four complete commanded electrical cycles of
+measurement. The window is rounded up to whole electrical cycles to
+reduce endpoint bias. A shared fixture in `examples/stepper_experiment.h`
+keeps the trace, sweep, and sweep regression tests on identical parameters.
+
+The summary CSV includes target/mean speed, RMS error relative to target,
+AC RMS (mean removed), peak-to-peak variation, backward-motion fraction,
+and **unwrapped** maximum/final electrical load angle. RMS error and AC
+RMS are absolute rad/s values; normalize by target for fractional ripple.
+`phase_boundary_crossed` flags excursions beyond +/- pi load angle during
+settling or measurement. This is a phase-well warning, not proof of
+permanent loss of synchronism; the default sweep has none. A rotor can
+reverse briefly within its magnetic potential well without missing a
+step.
+
+`build/stepper_sweep.{png,svg}` plots absolute and normalized RMS error,
+mean-speed error, and backward-motion fraction. Dashed markers compare
+the local small-signal resonance (~35.5 Hz) with excitation fundamentals:
+
+| Excitation | Predicted crossing speed | Observed nearby result |
+|---|---:|---|
+| 64-microstep update rate | .0174 rad/s | ~.274 rad/s RMS error at .01748 rad/s |
+| 16-microstep update rate | .0698 rad/s | ~1.06 rad/s RMS error at .0698 rad/s |
+| Detent, 200 cycles/rev | 1.116 rad/s | ~.896 rad/s RMS error at 1.108 rad/s |
+
+The prediction uses `sqrt(Kt*I*N*cos(loadAngle)/J)/(2*pi)` at the nominal
+.2 rad/s loaded equilibrium, with damping neglected. Nonlinearity and
+higher harmonics can shift peaks or create additional ones: the lower
+speed peaks in the 16-microstep curve are not separate mechanical modes.
+Large normalized error at low speed is not itself proof of resonance;
+use the absolute-error panel too. In this lightly damped setup, some
+runs move backward for nearly half the measurement window while still
+tracking mean speed closely. These are model demonstrations, not motor
+performance specifications.
+
+Custom sweeps and timestep checks:
+
+```
+# MIN MAX POINTS [tick Hz]
+build/stepper_velocity --sweep .01 .15 41 20000 > build/stepper_sweep_fine.csv
+python3 examples/plot_stepper_sweep.py build/stepper_sweep_fine.csv build/stepper_sweep_fine
+# All six cases at one speed, with explicit outer tick rate:
+build/stepper_velocity --point .0698 20000
+```
+
+Regression tests check resonance against detuned points, the RMS/variance
+identity, bounded load angle despite backward motion, original trace
+metrics after refactoring, and peak convergence under halved timestep.
+The strong 16/64-microstep and detent peaks change by less than .01% in
+the targeted 10 kHz vs 20 kHz checks. **Sub-percent high-speed tails are
+not equally converged**: pulse events occur only on outer ticks. For
+example, at 1.108 rad/s the 64-microstep RMS error falls from .183% to
+.068% when doubling tick rate. Do not interpret those small tails or
+fine jagged features as calibrated physical effects. Resolving pulse
+events inside a tick is a future numerical improvement; mechanical
+substeps alone do not fix pulse-time quantization.
 
 ## Controller convention
 

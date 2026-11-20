@@ -25,12 +25,17 @@ $(LIB): $(LIB_OBJS)
 test: $(LIB)
 	$(CC) $(CFLAGS) tests/test_simmy.c $(LIB) $(LDLIBS) -o $(BUILD)/test_simmy
 	$(BUILD)/test_simmy
+	$(CC) $(CFLAGS) tests/test_stepper.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper
+	$(BUILD)/test_stepper
+	$(CC) $(CFLAGS) tests/test_stepper_sweep.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_sweep
+	$(BUILD)/test_stepper_sweep
 
 examples: $(LIB)
 	$(CC) $(CFLAGS) examples/basic_two_mass.c $(LIB) $(LDLIBS) -o $(BUILD)/basic_two_mass
 	$(CC) $(CFLAGS) examples/three_mass_leadscrew.c $(LIB) $(LDLIBS) -o $(BUILD)/three_mass_leadscrew
 	$(CC) $(CFLAGS) examples/bidirectional_move.c $(LIB) $(LDLIBS) -o $(BUILD)/bidirectional_move
-	@echo "Built $(BUILD)/{basic_two_mass,three_mass_leadscrew,bidirectional_move} -- run each from the repo root"
+	$(CC) $(CFLAGS) examples/stepper_velocity.c $(LIB) $(LDLIBS) -o $(BUILD)/stepper_velocity
+	@echo "Built examples in $(BUILD)/ -- run each from the repo root"
 
 # Optional: only builds when the analog-servo sibling repo is present.
 # Links the REAL firmware/src/Control.c, read-only, by relative path --
