@@ -361,6 +361,42 @@ mechanical rotor angle: the model never assigns rotor position from the
 command. Ideal collocated feedback and exact detent knowledge remain
 best-case assumptions, not claims about production control performance.
 
+### Abrupt-start and energized-stop slip regressions
+
+`tests/test_stepper_moves.c` tests actual loss of synchronism at both ends
+of a move, in both directions, with the ideal-current motor. It includes:
+
+- A finite 128-microstep move started from rest at .2 rad/s, then held:
+  rings and settles at the intended unwrapped position.
+- A finite 1024-microstep move started abruptly at 20 rad/s: loses
+  synchronism while pulses are running, then relocks 16 electrical cycles
+  behind the command (64 full steps).
+- An isolated stop from synchronized .2 rad/s motion: overshoots, reverses,
+  and settles at the correct alignment.
+- An isolated stop from synchronized 20 rad/s motion: coasts through
+  multiple magnetic wells and settles 5 electrical cycles ahead of the
+  frozen command (20 full steps).
+
+Stopping **holds the final phase currents energized**; it neither snaps
+rotor velocity to zero nor disables the driver. Isolated stopping trials
+start on the ideal traveling solution so they cannot inherit startup
+errors. Each case checks unwrapped error and settled velocity, not only
+wrapped electrical alignment. Repeating the fast cases at 20 kHz instead
+of 10 kHz preserves the slipped-well counts. These deliberately severe
+20 rad/s cases demonstrate the model's dynamics, **not a calibrated
+high-speed pull-in/pull-out limit**. Load, detent, and current errors are
+disabled to isolate the effect.
+
+```
+make test
+build/test_stepper_moves --csv build/stepper_moves.csv
+python3 examples/plot_stepper_moves.py build/stepper_moves.csv docs/plots/stepper_start_stop_slip
+```
+
+The plot is retained in `docs/plots/stepper_start_stop_slip.{png,svg}`.
+The prior steady-speed sweeps still initialize at traveling equilibrium;
+they should not be interpreted as startup/stop tests.
+
 ## Controller convention
 
 There is exactly **one** public way to drive a simmy simulation with a

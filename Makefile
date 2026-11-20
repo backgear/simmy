@@ -31,6 +31,8 @@ test: $(LIB)
 	$(BUILD)/test_stepper_sweep
 	$(CC) $(CFLAGS) tests/test_stepper_compensation.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_compensation
 	$(BUILD)/test_stepper_compensation
+	$(CC) $(CFLAGS) tests/test_stepper_moves.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_moves
+	$(BUILD)/test_stepper_moves
 
 # Optional Python stdlib tooling tests; not a dependency of the C-only suite.
 test-tools:

@@ -235,7 +235,64 @@ saturation, finite metrics, and timestep/update-rate sensitivity.
   supply/current-regulator dynamics, saturation magnetics, or thermal model.
 - Command smoothing/interpolation was **not** tested in this comparison.
 
-## 7. Publication outline / follow-up questions
+## 7. Actual slips at the start and stop ends
+
+![Abrupt start and isolated stop produce persistent position errors](plots/stepper_start_stop_slip.png)
+
+Suggested caption: *The same torque law can fail to pull in at startup,
+or fail to capture the original magnetic well after an abrupt stop.
+Both settle to valid wrapped electrical alignment, but at the wrong
+unwrapped mechanical position. No missed steps are scripted into the model.*
+
+The new `tests/test_stepper_moves.c` regression fixture separates these
+transients from the steady-speed sweeps. It uses the same J, B, Kt, N,
+1 A vector current and 16-microstep excitation, but **no load, detent,
+or current errors**, so the settled equilibrium has an unambiguous
+integer electrical-cycle position offset. Start tests begin at rest.
+Isolated stop tests begin on the ideal synchronized traveling solution:
+`theta=-asin(B*omega/(Kt*I))/N`, command angle zero, actual velocity omega.
+They deliberately avoid conflating a startup error with stopping behavior.
+
+| Forward-direction test | Command / initial condition | Settled rotor-minus-command error |
+|---|---|---:|
+| Slow start + hold | 128 microsteps at .2 rad/s from rest | 0 electrical cycles |
+| Fast start + hold | 1024 microsteps at 20 rad/s from rest | -16 cycles / -64 full steps |
+| Gentle isolated stop | Freeze field, initial speed .2 rad/s | 0 electrical cycles |
+| Hard isolated stop | Freeze field, initial speed 20 rad/s | +5 cycles / +20 full steps |
+
+Reverse-direction tests produce sign-mirrored errors. The slow start's
+maximum lag is only .016 electrical cycles; the fast start accumulates
+over 15 cycles of lag while pulses are still being issued. The exact
+finite pulse count is asserted. After the final pulse the command index
+is frozen and phase currents remain energized for two simulated seconds.
+The low-speed stopping cases demonstrate overshoot and reversal before
+settling rather than an instantaneous velocity reset.
+
+Assertions require near-zero settled velocity and a stable integer-cycle
+alignment, then separately distinguish the intended well from a wrong
+well using **unwrapped** position. The fast-start and hard-stop final
+well counts persist when halving the outer timestep from 100 to 50 us,
+in both directions. These are direct model tests of slipping and
+recapture, not merely the earlier +/- pi excursion warning.
+
+Important scope boundary: 20 rad/s is a deliberately severe ideal-current
+test, not a measured startup threshold. The model still omits winding
+inductance, back-EMF, voltage/current bandwidth, and the ability of a real
+driver to sustain 1 A at that speed. These regressions establish that
+loss of synchronism and wrong-well recapture are possible in this
+implementation; they do not validate a hardware pull-in/pull-out curve.
+The earlier independent equilibrium-started sweeps remain steady-state
+experiments, not tests of these transients.
+
+Reproduce without running the large sweeps:
+
+```sh
+make test
+build/test_stepper_moves --csv build/stepper_moves.csv
+python3 examples/plot_stepper_moves.py build/stepper_moves.csv docs/plots/stepper_start_stop_slip
+```
+
+## 8. Publication outline / follow-up questions
 
 1. Open with average speed looking correct while the rotor reverses.
 2. Explain the magnetic spring and why microsteps do not assign position.
@@ -333,3 +390,5 @@ Figure inventory, in likely article order:
 4. `stepper_compensation_sweep` — different remedies address different mechanisms.
 5. `stepper_compensation_traces` — show remaining reversals, not only RMS wins.
 6. `stepper_spectrum` — optional supporting detail / appendix.
+7. `stepper_start_stop_slip` — persistent wrong-well capture at both ends;
+   use to distinguish step loss from the bounded ripple in the main sweeps.
