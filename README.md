@@ -4,7 +4,10 @@ A small mechatronics simulation library: a serial chain of rigid bodies
 connected by compliant (spring + damper + backlash) couplings, a
 composable "analog signal chain" standing in for a real DAC/amplifier
 signal path, and a bidirectional pulse source for step/dir-style
-position commands. Coefficients load from JSON. No opinion on control
+position commands. It also includes a current-driven two-phase stepper
+and an averaged voltage-driven induction motor with an open-loop V/Hz
+drive. Mechanical/analog coefficients load from JSON; motor parameters
+currently use the C API. No opinion on control
 algorithms -- you drive it with a plain function pointer, which may be a
 three-line demo P loop or a real production control cascade linked in
 from somewhere else.
@@ -26,7 +29,7 @@ ratios for recognizable mechanisms, not measurements.
 ```
 make lib        # build/libsimmy.a
 make test       # plain assert()-based test suite
-make examples   # three self-contained example programs (see below)
+make examples   # self-contained mechanical and motor experiments
 make integration  # OPTIONAL -- only if a ../analog-servo sibling repo exists
 ```
 
@@ -36,8 +39,8 @@ files" below).
 
 ## Scope and non-goals
 
-- This is a **mechanical + analog-signal-path** simulator. It has no
-  opinion about control algorithms. You drive it with `SimmyControllerFn`,
+- This is a **mechanical + analog-signal-path + simplified motor** simulator.
+  It has no opinion about control algorithms. Servo examples use `SimmyControllerFn`,
   a plain function pointer -- see "Controller convention" below. A demo
   P/PD loop and a real production control cascade linked in from
   elsewhere are both ordinary implementations of that same typedef;
@@ -396,6 +399,121 @@ python3 examples/plot_stepper_moves.py build/stepper_moves.csv docs/plots/steppe
 The plot is retained in `docs/plots/stepper_start_stop_slip.{png,svg}`.
 The prior steady-speed sweeps still initialize at traveling equilibrium;
 they should not be interpreted as startup/stop tests.
+
+## Induction motor + open-loop V/Hz drive
+
+The averaged induction machine uses four stator/rotor flux states in
+stationary alpha/beta coordinates, with explicit resistance, leakage and
+magnetizing inductance, pole pairs, induced currents, torque and stored
+magnetic energy. It is **voltage-driven**, not a prescribed torque curve.
+An independent open-loop V/Hz drive supplies balanced sinusoidal voltages,
+with frequency ramp, optional voltage boost and voltage ceiling.
+
+```
+make test examples
+build/induction_vfd > build/induction_vfd.csv
+python3 examples/plot_induction_vfd.py build/induction_vfd.csv docs/plots
+# Halve plant timestep without changing the fixed 1 kHz command clock:
+build/induction_vfd --steps 80 > build/induction_vfd_fine.csv
+```
+
+Plots are retained as PNG/SVG in `docs/plots/induction_vfd_{load,startup,low_speed}`.
+See **[induction/VFD notes and FOC roadmap](docs/induction-vfd-notes.md)**
+for equations, conventions, test coverage, parameters, results and caveats.
+
+At 50 Hz with two pole pairs, the illustrative example settles at 1498.43
+rpm unloaded and 1429.52 rpm with a 6 Nm brake, versus a 1500 rpm rotating
+field. A 20 Nm passive brake stalls it; reducing to 6 Nm permits restart.
+Unlike stepper loss of synchronism, **nonzero slip is normal under load**.
+The low-speed experiment shows voltage boost restoring torque margin,
+but also increased flux; the unsaturated model cannot prescribe safe
+boost settings.
+
+Motor quantities are SI. `SimmyMotorMount` maps to the chain's original
+counts/tick units. `SimmyChainStepDt` advances mechanics by an explicit
+fraction of the original tick without rescaling state/parameters; the
+existing one-tick APIs retain their behavior. The new example independently
+schedules drive updates at 1 kHz and plant integration at 40 kHz. Electrical
+RK4 plus partitioned mechanical integration is not a fully coupled
+fourth-order solver; convergence must be checked with the command clock fixed.
+
+The induction plant is separate from the drive so future rotor-flux-oriented
+control can replace V/Hz with a current controller while retaining the same
+motor. Both the **ideal true-flux FOC benchmark** and **encoder-assisted
+indirect FOC** below are implemented; a separate firmware observer and
+sensorless estimation remain future work. Rotor mechanical angle is not
+rotor-flux angle.
+
+No PWM switching, saturation, core losses, current-limit/trip protection,
+DC-bus dynamics or thermal model is included. Currents in the plots are
+instantaneous alpha/beta vector magnitudes, not transient phase RMS.
+Numerical library/tests/examples remain C + libm only; plotting is optional.
+
+## Ideal induction FOC benchmark
+
+`examples/induction_foc.h` is an example rotor-flux-oriented controller on
+the same induction plant, not a new motor model. It uses **true simulated
+rotor flux**, actual stator current and shaft speed: this is an ideal
+benchmark, not sensorless control. The 1 kHz speed loop supplies q-current
+demand, the 10 kHz current PI loops supply voltage, and the plant integrates
+at 40 kHz. Flux establishes before torque-current demand is released.
+
+```
+make test examples
+build/induction_foc > build/induction_foc.csv
+python3 examples/plot_induction_foc.py build/induction_foc.csv docs/plots
+# Refine only the plant timestep, not either control loop:
+build/induction_foc --steps 8 > build/induction_foc_fine.csv
+```
+
+The comparison uses a 150 rad/s request and passive brake steps. Under
+6 Nm, FOC briefly dips to 146.135 rad/s then returns to 150; V/Hz settles
+near 142.578 rad/s. A 20 Nm overload stalls both; both recover when it is
+reduced. FOC maintains its requested flux and limits vector-current demand
+to 8 A; V/Hz has no current protection, so this is **not an equal-current
+comparison**. Both drives share a 187.794 V voltage-vector ceiling.
+
+A separate unattainable 350 rad/s request exercises voltage saturation
+and anti-windup, then recovery to 100 rad/s. Actual current briefly reaches
+~11.93 A despite the 8 A request limit: **reference limiting is not hardware
+overcurrent protection**. Electrical state is never clipped to a requested
+current or speed. No field weakening or DC-bus/regeneration protection is
+implemented.
+
+See **[FOC notes, plots and limitations](docs/induction-foc-notes.md)**.
+Retained figures are `docs/plots/induction_foc_{comparison,load_rejection,voltage_limit}.{png,svg}`;
+summary data is `docs/data/induction_foc_summary.csv`. The indirect controller
+below now removes true-flux access; a firmware flux observer remains future work.
+
+## Indirect induction FOC and hidden-flux evaluation
+
+`examples/induction_ifoc.h` replaces true rotor-flux feedback with an
+encoder-assisted scalar flux model and slip-angle integration. The indirect
+controller receives **only stator-current and shaft-speed measurements**,
+plus explicit nominal parameters. Startup gating, torque conversion and
+current control all use estimated flux, never the hidden plant flux.
+Measurements remain ideal in this milestone; this is not sensorless control.
+
+```
+make test examples
+build/induction_ifoc > build/induction_ifoc.csv
+python3 examples/plot_induction_ifoc.py build/induction_ifoc.csv docs/plots
+```
+
+The plant's rotor resistance stays fixed while controller assumptions are
+matched, half or 1.5 times nominal. Matching parameters track the ideal
+oracle closely. With 1.5 times assumed rotor resistance, speed still tracks
+150 rad/s under 6 Nm while estimated flux is .5 Wb turns and actual flux is
+only .352: **correct speed does not prove correct flux estimation**. The
+half-resistance case overfluxes and becomes voltage-limited.
+
+See **[indirect FOC notes and comparison plots](docs/induction-ifoc-notes.md)**.
+Figures are retained as `docs/plots/induction_ifoc_{estimation,loaded_state}.{png,svg}`.
+True simulated flux is a scoring oracle within the chosen model, not a
+real-world measurement. If firmware later uses a flux observer, compare
+both estimates on the same measurement stream against hidden simulated
+truth; agreement between two estimators alone does not establish accuracy.
+No new firmware observer is implemented here.
 
 ## Controller convention
 

@@ -3,7 +3,7 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc
 LDLIBS := -lm
 
 BUILD := build
-LIB_SRCS := src/simmy.c src/simmy_json.c src/simmy_config.c
+LIB_SRCS := src/simmy.c src/simmy_induction.c src/simmy_json.c src/simmy_config.c
 LIB_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRCS))
 LIB := $(BUILD)/libsimmy.a
 
@@ -34,6 +34,12 @@ test: $(LIB)
 	$(BUILD)/test_stepper_compensation
 	$(CC) $(CFLAGS) tests/test_stepper_moves.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_moves
 	$(BUILD)/test_stepper_moves
+	$(CC) $(CFLAGS) tests/test_induction.c $(LIB) $(LDLIBS) -o $(BUILD)/test_induction
+	$(BUILD)/test_induction
+	$(CC) $(CFLAGS) tests/test_induction_foc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_induction_foc
+	$(BUILD)/test_induction_foc
+	$(CC) $(CFLAGS) tests/test_induction_ifoc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_induction_ifoc
+	$(BUILD)/test_induction_ifoc
 
 # Optional Python stdlib tooling tests; not a dependency of the C-only suite.
 test-tools:
@@ -45,6 +51,9 @@ examples: $(LIB)
 	$(CC) $(CFLAGS) examples/bidirectional_move.c $(LIB) $(LDLIBS) -o $(BUILD)/bidirectional_move
 	$(CC) $(CFLAGS) examples/stepper_velocity.c $(LIB) $(LDLIBS) -o $(BUILD)/stepper_velocity
 	$(CC) $(CFLAGS) examples/stepper_compensation.c $(LIB) $(LDLIBS) -o $(BUILD)/stepper_compensation
+	$(CC) $(CFLAGS) examples/induction_vfd.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_vfd
+	$(CC) $(CFLAGS) examples/induction_foc.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_foc
+	$(CC) $(CFLAGS) examples/induction_ifoc.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_ifoc
 	@echo "Built examples in $(BUILD)/ -- run each from the repo root"
 
 # Optional: only builds when the analog-servo sibling repo is present.

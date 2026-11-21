@@ -81,15 +81,15 @@ void SimmyChainInit(SimmyChainState *state, const SimmyChainParams *params) {
 
 static void ChainStep(SimmyChainState *state, const SimmyChainParams *params, double force,
                       const SimmyStepperParams *motor, double radiansPerCount,
-                      double forcePerNm, double currentA, double currentB) {
+                      double forcePerNm, double currentA, double currentB, double duration) {
   int n = params->bodyCount;
   if (n <= 1 && !motor) {
-    BodyMechanicalStep(&state->bodies[0], &params->bodies[0], force, 1.0);
+    BodyMechanicalStep(&state->bodies[0], &params->bodies[0], force, duration);
     return;
   }
 
   int subSteps = params->subSteps > 0 ? params->subSteps : SIMMY_DEFAULT_SUBSTEPS;
-  double dt = 1.0 / subSteps;
+  double dt = duration / subSteps;
   double couplingForce[SIMMY_MAX_BODIES - 1];
 
   for (int step = 0; step < subSteps; step++) {
@@ -115,13 +115,18 @@ static void ChainStep(SimmyChainState *state, const SimmyChainParams *params, do
 }
 
 void SimmyChainStep(SimmyChainState *state, const SimmyChainParams *params, double force) {
-  ChainStep(state, params, force, NULL, 0, 0, 0, 0);
+  ChainStep(state, params, force, NULL, 0, 0, 0, 0, 1);
+}
+
+void SimmyChainStepDt(SimmyChainState *state, const SimmyChainParams *params,
+                       double force, double dtTicks) {
+  ChainStep(state, params, force, NULL, 0, 0, 0, 0, dtTicks);
 }
 
 void SimmyStepperChainStep(SimmyChainState *state, const SimmyChainParams *params,
                            const SimmyStepperParams *motor, double radiansPerCount,
                            double forcePerNm, double currentA, double currentB) {
-  ChainStep(state, params, 0, motor, radiansPerCount, forcePerNm, currentA, currentB);
+  ChainStep(state, params, 0, motor, radiansPerCount, forcePerNm, currentA, currentB, 1);
 }
 
 void SimmyStepperCurrents(double commandAngle, double peakCurrent,

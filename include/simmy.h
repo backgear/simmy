@@ -15,10 +15,11 @@
  * chain of rigid bodies connected by compliant (spring+damper+backlash)
  * couplings, a composable "analog signal chain" standing in for a real
  * DAC/amplifier signal path, and a bidirectional pulse source for
- * step/dir-style position commands.
+ * step/dir-style position commands. Separate motor components model
+ * two-phase stepper torque and an averaged voltage-driven induction machine.
  *
  * Scope and non-goals:
- *   - This is a MECHANICAL + ANALOG-SIGNAL-PATH simulator. It has no
+ *   - This is a MECHANICAL + ANALOG-SIGNAL-PATH + SIMPLIFIED MOTOR simulator. It has no
  *     opinion about control algorithms. You drive it with a plain
  *     function pointer (SimmyControllerFn) -- see below -- which may be
  *     a three-line demo P loop or a real production control cascade
@@ -56,7 +57,8 @@
  * position unit), "counts/tick" (velocity), and a tick is nominally
  * 1ms/1kHz, matching the servo-loop rate this library was built to test
  * against -- but nothing here enforces that; tickHz is always an
- * explicit parameter.
+ * explicit parameter. Motor electrical APIs instead use SI units, with
+ * explicit conversion to the chain's original counts/tick units.
  */
 
 #define SIMMY_MAX_BODIES 8
@@ -137,6 +139,13 @@ void SimmyChainInit(SimmyChainState *state, const SimmyChainParams *params);
  * dynamics internally. */
 void SimmyChainStep(SimmyChainState *state, const SimmyChainParams *params, double force);
 
+/* Explicit duration in the chain's ORIGINAL tick units (>0). State velocity
+ * remains counts/original-tick; do not rescale parameters when refining dt.
+ * Held force, same mechanical substep policy as SimmyChainStep. Duration 1
+ * is identical to SimmyChainStep. No wall-clock or command-rate dependency. */
+void SimmyChainStepDt(SimmyChainState *state, const SimmyChainParams *params,
+                       double force, double dtTicks);
+
 /* The feedbackBody's state, rounded to the nearest whole count -- what a
  * real encoder reading of that body's continuous state would be. */
 int32_t SimmyChainFeedbackPositionCounts(const SimmyChainState *state, const SimmyChainParams *params);
@@ -188,6 +197,80 @@ double SimmyStepperTorque(const SimmyStepperParams *params, double rotorAngle,
 void SimmyStepperChainStep(SimmyChainState *state, const SimmyChainParams *params,
                            const SimmyStepperParams *motor, double radiansPerCount,
                            double forcePerNm, double currentA, double currentB);
+
+/* ==================== Averaged induction motor + V/Hz drive ========== */
+
+/* Balanced squirrel-cage machine, rotor parameters referred to stator.
+ * Stationary amplitude-invariant Clarke alpha/beta coordinates: phase A
+ * equals alpha, balanced phase peak equals vector magnitude. SI units.
+ * Unsaturated linear magnetics; no PWM, core loss, thermal or skin effects. */
+typedef struct {
+  int polePairs;                     /* >0: two pole pairs = four poles */
+  double statorResistance, rotorResistance; /* ohms, >=0 */
+  double statorLeakageInductance, rotorLeakageInductance; /* H, >0 */
+  double magnetizingInductance;       /* H, >0; Ls=Lls+Lm, Lr=Llr+Lm */
+} SimmyInductionParams;
+
+typedef struct {
+  double statorFlux[2], rotorFlux[2]; /* alpha/beta flux linkages, Wb turns */
+} SimmyInductionState;
+
+typedef struct {
+  double statorCurrent[2], rotorCurrent[2]; /* A, rotor referred to stator */
+  double torque;                     /* Nm, positive for positive rotation */
+  double magneticEnergy;             /* J, includes 3/2 Clarke factor */
+} SimmyInductionOutput;
+
+int SimmyInductionParamsValid(const SimmyInductionParams *params);
+void SimmyInductionInit(SimmyInductionState *state);
+void SimmyInductionEvaluate(const SimmyInductionState *state,
+                            const SimmyInductionParams *params, SimmyInductionOutput *output);
+/* RK4 electrical integration over dtSeconds>0. Voltage and mechanical
+ * speed held over this integration interval. Returns RK-weighted average
+ * torque for mechanical coupling; Evaluate gives endpoint instantaneous
+ * torque. Caller supplies valid params and resolves electrical time scales. */
+double SimmyInductionStep(SimmyInductionState *state, const SimmyInductionParams *params,
+                          double voltageAlpha, double voltageBeta,
+                          double mechanicalSpeedRadSec, double dtSeconds);
+
+typedef struct {
+  double radiansPerCount, forcePerNm, tickSeconds; /* all >0, original chain units */
+} SimmyMotorMount;
+
+/* Couple to body 0 without rotor-speed feedback to the DRIVE. Machine
+ * physics uses body-0 speed internally. Average electrical torque drives
+ * mechanics over dt/tickSeconds; speed held within electrical RK4 stages
+ * makes this a partitioned (not fully coupled RK4) solver. Refine dt with
+ * drive update schedule FIXED to check coupled convergence. */
+void SimmyInductionChainStep(SimmyInductionState *motorState, const SimmyInductionParams *motor,
+                             SimmyChainState *chainState, const SimmyChainParams *chain,
+                             const SimmyMotorMount *mount, double voltageAlpha,
+                             double voltageBeta, double dtSeconds);
+
+typedef struct {
+  double baseFrequencyHz;             /* >0 */
+  double basePhasePeakV;              /* >0; NOT line-line RMS */
+  double maxPhasePeakV;               /* >0, averaged inverter voltage ceiling */
+  double boostPhasePeakV;             /* 0..basePhasePeakV; low-speed intercept */
+  double rampHzPerSecond;             /* >=0; 0 means instantaneous frequency command */
+} SimmyVfdParams;
+
+typedef struct {
+  double frequencyHz, phaseRadians, phasePeakV;
+} SimmyVfdState;
+
+void SimmyVfdInit(SimmyVfdState *state);
+/* Called ONLY at the chosen drive-command update rate, independent of
+ * integration dt. Signed target frequency; no rotor measurements. V/Hz
+ * interpolates boost..base below base Hz, continues above, then clamps.
+ * At exactly zero Hz voltage is zero (no DC injection/holding mode).
+ * Zero terminal voltage is NOT an open-circuit/disconnected stator. */
+void SimmyVfdCommandStep(SimmyVfdState *state, const SimmyVfdParams *params,
+                         double targetFrequencyHz, double commandDtSeconds);
+/* Advance continuous oscillator with held frequency/amplitude. Returns
+ * midpoint alpha/beta voltage for the integration interval; phase is
+ * wrapped. Does NOT advance the frequency ramp or command-update clock. */
+void SimmyVfdVoltageStep(SimmyVfdState *state, double dtSeconds, double voltage[2]);
 
 /* ==================== Analog signal chain ============================ */
 
