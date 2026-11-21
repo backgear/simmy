@@ -8,8 +8,9 @@ LIB_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRCS))
 LIB := $(BUILD)/libsimmy.a
 
 ANALOG_SERVO_DIR := ../analog-servo
+ANALOG_SERVO_RLS_DIR ?= ../analog-servo-rls
 
-.PHONY: all lib test test-tools examples integration clean
+.PHONY: all lib test test-tools examples integration rls-integration clean
 
 all: lib test examples
 
@@ -60,6 +61,25 @@ integration: $(LIB)
 	  $(ANALOG_SERVO_DIR)/firmware/src/Control.c \
 	  $(LIB) $(LDLIBS) -o $(BUILD)/analog_servo_integration
 	$(BUILD)/analog_servo_integration
+
+# Optional: only builds when the analog-servo-rls sibling (the
+# autotune-rls branch's own worktree, see its AGENTS.md's Branch
+# convention) is present. Links the REAL firmware/src/{Control,RLS,
+# GainGlide}.c read-only -- RLS.c/GainGlide.c don't depend on Autotune.c
+# (only its result-enum header, see RLS.h), so that file is deliberately
+# not linked here. See examples/rls_integration/.
+rls-integration: $(LIB)
+	@if [ ! -f $(ANALOG_SERVO_RLS_DIR)/firmware/src/RLS.c ]; then \
+	  echo "skipping rls-integration example: $(ANALOG_SERVO_RLS_DIR)/firmware/src/RLS.c not found"; \
+	  exit 0; \
+	fi
+	$(CC) $(CFLAGS) -I $(ANALOG_SERVO_RLS_DIR)/firmware/include \
+	  examples/rls_integration/main.c \
+	  $(ANALOG_SERVO_RLS_DIR)/firmware/src/Control.c \
+	  $(ANALOG_SERVO_RLS_DIR)/firmware/src/RLS.c \
+	  $(ANALOG_SERVO_RLS_DIR)/firmware/src/GainGlide.c \
+	  $(LIB) $(LDLIBS) -o $(BUILD)/rls_integration
+	$(BUILD)/rls_integration
 
 clean:
 	rm -rf $(BUILD)
