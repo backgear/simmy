@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "simmy_bldc.h"
 
 /*
  * simmy -- a small mechatronics simulation library.
@@ -16,7 +17,8 @@
  * couplings, a composable "analog signal chain" standing in for a real
  * DAC/amplifier signal path, and a bidirectional pulse source for
  * step/dir-style position commands. Separate motor components model
- * two-phase stepper torque and an averaged voltage-driven induction machine.
+ * two-phase stepper torque, an averaged voltage-driven induction machine,
+ * and permanent-magnet winding/bridge circuits (including a reduced model).
  *
  * Scope and non-goals:
  *   - This is a MECHANICAL + ANALOG-SIGNAL-PATH + SIMPLIFIED MOTOR simulator. It has no
@@ -37,12 +39,12 @@
  *     whether a config actually fits a real physical setup. Simmy does
  *     not support closing the loop against a non-feedback body; that is
  *     a deliberate scope boundary, not a missing feature.
- *   - Every numeric model here is intentionally simplified. Cogging and
- *     commutation ripple are both represented by the same plain
- *     sinusoidal position-dependent term (SimmyBodyParams.rippleAmplitude/
- *     ripplePeriodCounts) -- this is NOT a magnetic/commutation model,
- *     just a stand-in for "some kind of periodic torque disturbance,"
- *     with the period/amplitude picking which real effect it represents.
+ *   - Every numeric model here is intentionally simplified. The mechanical
+ *     body's sinusoidal ripple (SimmyBodyParams.rippleAmplitude/
+ *     ripplePeriodCounts) is just an additive stand-in for periodic torque,
+ *     NOT an electrical commutation model. Dedicated motor components
+ *     instead compute torque from phase currents and rotor state; avoid
+ *     double-counting the same effect with extra mechanical ripple.
  *     Likewise the stiction model is the textbook "decide before
  *     integrating whether the driving force can overcome static
  *     friction" formulation -- it avoids the classic bug where a naive

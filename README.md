@@ -5,8 +5,10 @@ connected by compliant (spring + damper + backlash) couplings, a
 composable "analog signal chain" standing in for a real DAC/amplifier
 signal path, and a bidirectional pulse source for step/dir-style
 position commands. It also includes a current-driven two-phase stepper
-and an averaged voltage-driven induction motor with an open-loop V/Hz
-drive. Mechanical/analog coefficients load from JSON; motor parameters
+and an averaged voltage-driven induction motor with V/Hz and FOC examples.
+Permanent-magnet models cover balanced healthy operation and explicit
+wye/delta winding circuits with BLDC commutation/device faults and heat
+accounting. Mechanical/analog coefficients load from JSON; motor parameters
 currently use the C API. No opinion on control
 algorithms -- you drive it with a plain function pointer, which may be a
 three-line demo P loop or a real production control cascade linked in
@@ -56,14 +58,13 @@ files" below).
   comparison that matters for judging whether a config fits a real
   physical setup. Simmy does not support closing the loop against a
   non-feedback body; that's a deliberate scope boundary.
-- Cogging and commutation ripple are both represented by the same plain
-  sinusoidal position-dependent term (`rippleAmplitude`/
-  `ripplePeriodCounts`) -- not a magnetic/commutation model, a stand-in,
-  with period/amplitude picking which real effect it represents. This is
-  useful as a simple position-only disturbance, but it cannot represent
-  two-phase stepper torque production. The dedicated stepper model below
-  combines two phase currents with rotor electrical angle; use it for
-  microstepping rather than treating all motor errors as additive ripple.
+- The mechanical body's additive sinusoidal ripple (`rippleAmplitude`/
+  `ripplePeriodCounts`) can stand in for cogging or commutation disturbance;
+  it is not itself an electrical model. The dedicated stepper and BLDC
+  models instead calculate torque from actual phase currents and rotor
+  angle. Use those for microstepping/commutation questions; do not add a
+  second generic ripple that double-counts the same electromagnetic effect.
+  Separate cogging may still be represented as a mechanical disturbance.
 - The stiction model is the textbook "decide before integrating whether
   the driving force can overcome static friction" formulation -- it
   avoids the classic bug where a naive post-hoc check makes velocity
@@ -515,16 +516,86 @@ both estimates on the same measurement stream against hidden simulated
 truth; agreement between two estimators alone does not establish accuracy.
 No new firmware observer is implemented here.
 
+## BLDC / permanent-magnet models, faults and heat
+
+The public API in `include/simmy_bldc.h` (also included by `simmy.h`) offers:
+
+- **Reduced balanced PM model:** two alpha/beta current states, voltage-driven
+  current dynamics, torque, magnetic energy and copper heat. Exact reductions
+  are tested for sine/trapezoidal floating-wye windings and terminal-equivalent
+  sine delta without circulation.
+- **Explicit winding/inverter model:** three winding branches, floating-neutral
+  wye or closed delta, per-winding R/L/Ke, sinusoidal/trapezoidal back-EMF, and
+  three legs with FET resistance, open channels and body-diode freewheeling.
+  Delta retains internal circulating current, not just terminal currents.
+
+The examples compare healthy operation, mistimed/wrong-sector commutation,
+weak high-resistance windings, degraded/open high FETs and static open windings
+in both connections. Controllers remain separate; neither actual speed nor
+current is assigned/clipped to the demand. A fixed-rate PI/six-step/PWM example
+uses the existing mechanics and independent solver/control clocks.
+
+```
+make test examples test-tools
+build/bldc_equivalence > build/bldc_equivalence.csv
+build/bldc_circulation > build/bldc_circulation.csv
+python3 examples/run_bldc_sweep.py --output build/bldc_faults.csv
+python3 examples/run_bldc_sweep.py --steps 8 --output build/bldc_faults_fine.csv
+python3 examples/plot_bldc.py build/bldc_faults.csv docs/plots \
+    --fine build/bldc_faults_fine.csv \
+    --equivalence build/bldc_equivalence.csv \
+    --circulation build/bldc_circulation.csv
+```
+
+The stdlib-only runner defaults to **256 workers, limited by trial count**;
+`--jobs` overrides, `--case` selects subsets. Ordered output is byte-identical
+to serial execution and replaced atomically only on success. `--steps` refines
+only the plant grid, not the fixed PWM/commutation/speed clocks.
+
+**Heat added is tracked in joules per winding, transistor and diode.**
+Numerical integration damping is accounted for separately, never called
+physical heat. The example score normalizes heat per delivered brake work
+against healthy operation, but refuses to score failed tracking or mismatched
+work. Correct speed can hide a heat regression: a +60-electrical-degree wrong
+sector still tracks speed here while costing about 7.47x healthy heat/work in
+wye and 4.74x in delta.
+
+For CI-style comparison with a retained historical baseline (no plotting deps):
+
+```
+python3 examples/bldc_metrics.py build/bldc_faults_summary.csv \
+    docs/data/bldc_faults_summary.csv --case wye_healthy --case delta_healthy
+# Exit 0: pass; 1: heat/task regression; 2: invalid comparison/input.
+```
+
+See **[BLDC fault/model notes, equations, validation and plots](docs/bldc-fault-notes.md)**.
+Six PNG/SVG figures are retained as `docs/plots/bldc_*`; compact summary,
+convergence and illustrative benchmark data are in `docs/data/bldc_*.csv`.
+The independent coupled equivalence example agrees within ~1e-12 A; the reduced
+model was roughly 4x cheaper in a local electrical-step benchmark.
+
+These are linear-magnetic equation-level models, not identified motors or
+hardware fault diagnosis. Mutual inductance, saturation, thermal dynamics,
+core/switching losses, current trips, shorted-turn circuits and shoot-through/
+DC-link dynamics are not included. Heat is not temperature. A healthy harmonic
+delta is outside the two-state equivalence: it can heat internally even with
+zero terminal current. Static winding opens are supported; opening an energized
+winding is rejected rather than erasing stored energy.
+
 ## Controller convention
 
-There is exactly **one** public way to drive a simmy simulation with a
-controller:
+For the position/axis simulation harness, the controller callback is:
 
 ```c
 typedef int32_t (*SimmyControllerFn)(void *userData, int32_t targetPosition,
                                       int32_t actualPosition, int32_t actualVelocity,
                                       uint32_t dtCycles);
 ```
+
+Motor experiments separately schedule voltage/gate controllers at explicit
+sample rates; they need not squeeze vector electrical commands through this
+scalar position/force callback. Both styles keep controllers outside plant
+physics.
 
 The signature is chosen to match a typical fixed-point position-control
 tick function closely enough that wrapping a real controller is a direct

@@ -3,7 +3,7 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc
 LDLIBS := -lm
 
 BUILD := build
-LIB_SRCS := src/simmy.c src/simmy_induction.c src/simmy_json.c src/simmy_config.c
+LIB_SRCS := src/simmy.c src/simmy_induction.c src/simmy_bldc.c src/simmy_json.c src/simmy_config.c
 LIB_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRCS))
 LIB := $(BUILD)/libsimmy.a
 
@@ -16,7 +16,7 @@ all: lib test examples
 
 lib: $(LIB)
 
-$(BUILD)/%.o: src/%.c include/simmy.h src/simmy_json.h
+$(BUILD)/%.o: src/%.c include/simmy.h include/simmy_bldc.h src/simmy_json.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -40,10 +40,15 @@ test: $(LIB)
 	$(BUILD)/test_induction_foc
 	$(CC) $(CFLAGS) tests/test_induction_ifoc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_induction_ifoc
 	$(BUILD)/test_induction_ifoc
+	$(CC) $(CFLAGS) tests/test_bldc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_bldc
+	$(BUILD)/test_bldc
+	$(CC) $(CFLAGS) tests/test_bldc_moves.c $(LIB) $(LDLIBS) -o $(BUILD)/test_bldc_moves
+	$(BUILD)/test_bldc_moves
 
 # Optional Python stdlib tooling tests; not a dependency of the C-only suite.
 test-tools:
 	python3 -m unittest discover -s tests -p 'test_*runner.py'
+	python3 -m unittest discover -s tests -p 'test_bldc_metrics.py'
 
 examples: $(LIB)
 	$(CC) $(CFLAGS) examples/basic_two_mass.c $(LIB) $(LDLIBS) -o $(BUILD)/basic_two_mass
@@ -54,6 +59,9 @@ examples: $(LIB)
 	$(CC) $(CFLAGS) examples/induction_vfd.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_vfd
 	$(CC) $(CFLAGS) examples/induction_foc.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_foc
 	$(CC) $(CFLAGS) examples/induction_ifoc.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_ifoc
+	$(CC) $(CFLAGS) examples/bldc_faults.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_faults
+	$(CC) $(CFLAGS) examples/bldc_equivalence.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_equivalence
+	$(CC) $(CFLAGS) examples/bldc_circulation.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_circulation
 	@echo "Built examples in $(BUILD)/ -- run each from the repo root"
 
 # Optional: only builds when the analog-servo sibling repo is present.
