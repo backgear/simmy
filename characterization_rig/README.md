@@ -11,7 +11,30 @@ pio run                 # build
 pio run -t upload        # flash via ST-Link (default; see platformio.ini for DFU)
 pio device monitor       # not useful for the binary protocol itself, but
                           # confirms the board enumerates as a CDC-ACM device
+pio test -e native       # host-native unit tests, no board required (see below)
 ```
+
+## Testing
+
+`crc32`, `sha256`, `json_writer`, and `run_buffer` (command/capture buffer
+logic) are plain C/C++ with no Arduino or HAL dependency, so they run as
+host-native unit tests under PlatformIO's `native` platform -- no board,
+no hardware-in-the-loop:
+
+```
+pio test -e native
+```
+
+`main.cpp`/`axis_hw.cpp`/`protocol.cpp` are excluded from that environment
+(`build_src_filter` in `platformio.ini`) since they pull in Arduino.h and
+STM32 HAL headers the host toolchain doesn't have; those are only exercised
+by the `bluepill_f103c8` build and real hardware. `.github/workflows/
+characterization_rig.yml` runs both the native tests and the
+`bluepill_f103c8` build on every push/PR touching this directory.
+
+Not covered here (see "Not implemented" below): the protocol document's
+own acceptance-test golden vectors, and anything that needs the actual
+board (timing accuracy, encoder/PWM electrical behavior, ADC readings).
 
 ## What this device actually does
 

@@ -1,0 +1,34 @@
+name: characterization_rig firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "characterization_rig/**"
+      - ".github/workflows/characterization_rig.yml"
+  pull_request:
+    paths:
+      - "characterization_rig/**"
+      - ".github/workflows/characterization_rig.yml"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: characterization_rig
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Host-native unit tests (crc32, sha256, json_writer, run_buffer)
+        run: pio test -e native
+
+      - name: Build firmware for bluepill_f103c8
+        run: pio run -e bluepill_f103c8
