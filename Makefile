@@ -10,7 +10,7 @@ LIB := $(BUILD)/libsimmy.a
 ANALOG_SERVO_DIR := ../analog-servo
 ANALOG_SERVO_RLS_DIR ?= ../analog-servo-rls
 
-.PHONY: all lib test test-tools examples integration rls-integration clean
+.PHONY: all lib test test-tools examples integration rls-integration rls-axis-command-v2 clean
 
 all: lib test examples
 
@@ -51,6 +51,8 @@ test-tools:
 	python3 -m unittest discover -s tests -p 'test_bldc_metrics.py'
 
 examples: $(LIB)
+	$(CC) $(CFLAGS) examples/mechanical_signatures.c $(LIB) $(LDLIBS) -o $(BUILD)/mechanical_signatures
+	$(CC) $(CFLAGS) examples/dc_motor.c $(LIB) $(LDLIBS) -o $(BUILD)/dc_motor
 	$(CC) $(CFLAGS) examples/basic_two_mass.c $(LIB) $(LDLIBS) -o $(BUILD)/basic_two_mass
 	$(CC) $(CFLAGS) examples/three_mass_leadscrew.c $(LIB) $(LDLIBS) -o $(BUILD)/three_mass_leadscrew
 	$(CC) $(CFLAGS) examples/bidirectional_move.c $(LIB) $(LDLIBS) -o $(BUILD)/bidirectional_move
@@ -97,6 +99,22 @@ rls-integration: $(LIB)
 	  $(ANALOG_SERVO_RLS_DIR)/firmware/src/GainGlide.c \
 	  $(LIB) $(LDLIBS) -o $(BUILD)/rls_integration
 	$(BUILD)/rls_integration
+
+# Optional, same sibling/linking convention as rls-integration above, but
+# against the real frozen empirical SM232AE/TQ10 axis model instead of a
+# simmy chain -- see examples/rls_axis_command_v2/.
+rls-axis-command-v2: $(LIB)
+	@if [ ! -f $(ANALOG_SERVO_RLS_DIR)/firmware/src/RLS.c ]; then \
+	  echo "skipping rls-axis-command-v2 example: $(ANALOG_SERVO_RLS_DIR)/firmware/src/RLS.c not found"; \
+	else \
+	  $(CC) $(CFLAGS) -I $(ANALOG_SERVO_RLS_DIR)/firmware/include \
+	    examples/rls_axis_command_v2/main.c \
+	    $(ANALOG_SERVO_RLS_DIR)/firmware/src/Control.c \
+	    $(ANALOG_SERVO_RLS_DIR)/firmware/src/RLS.c \
+	    $(ANALOG_SERVO_RLS_DIR)/firmware/src/GainGlide.c \
+	    $(LIB) $(LDLIBS) -o $(BUILD)/rls_axis_command_v2 && \
+	  $(BUILD)/rls_axis_command_v2; \
+	fi
 
 clean:
 	rm -rf $(BUILD)

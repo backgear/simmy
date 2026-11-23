@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Optional blog figures; requires numpy/matplotlib.
+"""Optional figures; requires numpy/matplotlib.
 Usage: python3 examples/plot_stepper_compensation.py [BUILD_DIR [OUTPUT_DIR]]
-Reads the sweep and three traces documented in docs/stepper-blog-notes.md.
+Reads the sweep and three traces documented in docs/motors/stepper.md.
 """
 import csv
 from pathlib import Path

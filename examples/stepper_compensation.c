@@ -1,5 +1,5 @@
 /* Controlled comparison: same motor/drive, four current-domain policies.
- * No extra mechanical force is injected. See docs/stepper-blog-notes.md.
+ * No extra mechanical force is injected. See docs/motors/stepper.md.
  */
 #include "stepper_experiment.h"
 #include <errno.h>

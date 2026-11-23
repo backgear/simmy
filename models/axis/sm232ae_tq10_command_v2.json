@@ -1,0 +1,59 @@
+{
+  "schema": "axis-command-model-v2",
+  "status": "frozen before next fresh validation",
+  "model": "filtered deadbanded command with separate positive/negative effective constant and viscous drag; stiction",
+  "units": "mechanical radians/seconds; command normalized to code/32767, not measured current",
+  "encoder_counts_per_rev": 4096,
+  "integration_step_s": 0.0005,
+  "parameters": {
+    "positive_gain_rad_s2_per_command": 12969.049188168381,
+    "negative_gain_rad_s2_per_command": 13095.593344412851,
+    "positive_constant_loss_rad_s2": 222.45000559092267,
+    "negative_constant_loss_rad_s2": 50.39644756078111,
+    "positive_viscous_s_inv": 3.413236043172941,
+    "negative_viscous_s_inv": 1.9328624283994769,
+    "command_filter_tau_s": 0.0004566877755044796,
+    "command_deadband_fraction": 0.0019446740736449863
+  },
+  "training_episodes": 100,
+  "training_sources": [
+    "build/axis-validation/pulse-characterization/axis-fresh-model-validation-v1/fresh-push-brake",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-01",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-02",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-03",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-04",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-05",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-06",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-01",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-02",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-03",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-04",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-05",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-06",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-01",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-02",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-03",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-04",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-05",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-06",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-07",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-08"
+  ],
+  "seen_validation_promoted_to_training": [
+    "build/axis-validation/pulse-characterization/axis-fresh-model-validation-v1"
+  ],
+  "kernel_sha256": "4d4371f5a64ea45eb428ac8af006c5b82583ade1ac9066212b74407975c3c323",
+  "solver": {
+    "success": true,
+    "message": "`ftol` termination condition is satisfied.",
+    "nfev": 11,
+    "cost": 0.10531758140173453
+  },
+  "limitations": [
+    "constant directional losses absorb any residual torque bias; no unique electrical offset",
+    "no rotor-angle/cogging/hysteresis state",
+    "effective filter/gains are not independently measured",
+    "longer future moves test extrapolation beyond training coast speeds",
+    "fresh validation must run continuously with no pulse-boundary resets"
+  ]
+}
