@@ -438,6 +438,29 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  /* --fixed-seed-csv <out.csv>: RunFromFixedSeed across every aggressiveness
+   * level, held to the SAME known-good hand-tuned starting gains each time --
+   * the blog writeup's "same starting point, does a^64 actually track better
+   * than its neighbors" figure, sharper than --sweep-csv's randomized-seed
+   * counts. */
+  if (argc >= 3 && strcmp(argv[1], "--fixed-seed-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "aggressiveness,exponent,converged,before_cruise,after_cruise,found_kp_q8,found_ki_q8\n");
+    for (int32_t level = 0; level <= 6; level++) {
+      FixedSeedResult r = RunFromFixedSeed(p, countsPerRad, 64000, 4096, level);
+      int exponent = 2;
+      for (int32_t i = 0; i < level; i++) exponent *= 2;
+      fprintf(csv, "%d,%d,%d,%d,%d,%d,%d\n", level, exponent, r.result == AUTOTUNE_RESULT_OK,
+              r.beforeCruise, r.afterCruise, r.foundKp, r.foundKi);
+      printf("aggressiveness=%d (a^%d): converged=%d before=%d after=%d foundKp=%d foundKi=%d\n",
+             level, exponent, r.result == AUTOTUNE_RESULT_OK, r.beforeCruise, r.afterCruise,
+             r.foundKp, r.foundKi);
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
   /* --fixed-gains <velKpQ8> <velKiQ8> [seed] [velocityClamp] [torqueClampMax] [posGainQ8]:
    * run this model's own RunMove (no RLS, feedRls=0) with an explicit
    * velocity-loop gain pair, for direct comparison against a real board's
