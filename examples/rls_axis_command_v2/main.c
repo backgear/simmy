@@ -202,15 +202,33 @@ typedef struct {
   int converged, improved, beatsKnownGood, trials;
 } SweepSummary;
 
-/* Runs the same 100-point randomized velocity-gain sweep at a given
- * sPoleAggressiveness level (see RLS.h). perTrialCsv, if non-NULL, gets one
- * row per trial (including rejected ones) -- used only for the level this
- * repo settled on, to plot the actual before/after distribution; every
- * level still contributes to the summary counts either way. */
+/* One knob per RLS.c "generous, bench-TBD placeholder" default (see RLS.h's
+ * sweep-only setters) plus the sweep's own RNG seed, bundled so RunSweep's
+ * signature doesn't grow a new positional argument per knob swept. Defaults
+ * here mirror RLS.c's shipped #define values exactly -- gainMaxQ16's 65536
+ * is RLS_SCALE (Q16.16 "1.0"), not independently chosen. */
+typedef struct {
+  int32_t aggressiveness, lambdaQ8, glideMs;
+  int32_t bMaxAtRefQ8, uMin, vMin, ditherPctQ8;
+  int64_t gainMaxQ16;
+  uint32_t rngSeed;
+} SweepParams;
+
+static const SweepParams kDefaultSweepParams = {
+    .aggressiveness = 5, .lambdaQ8 = 256, .glideMs = 2000,
+    .bMaxAtRefQ8 = 64, .uMin = 50, .vMin = 2, .ditherPctQ8 = 13,
+    .gainMaxQ16 = 2000LL * 65536LL, .rngSeed = 0x9e3779b9u,
+};
+
+/* Runs the same 100-point randomized velocity-gain sweep at the given
+ * SweepParams. perTrialCsv, if non-NULL, gets one row per trial (including
+ * rejected ones) -- used only for the one configuration this repo settled
+ * on, to plot the actual before/after distribution; every configuration
+ * still contributes to the summary counts either way. */
 static SweepSummary RunSweep(const double *p, double countsPerRad, int32_t knownGoodCruise,
-                              int32_t aggressiveness, FILE *perTrialCsv) {
+                              SweepParams sp, FILE *perTrialCsv) {
   SweepSummary s = {0, 0, 0, 100};
-  uint32_t rng = 0x9e3779b9u; /* fixed seed -- deterministic sweep, not a claim about real randomness
+  uint32_t rng = sp.rngSeed; /* deterministic sweep, not a claim about real randomness
                                   (see docs/scope.md's own determinism note: this is the caller's own
                                   code picking starting points, not simmy's physics calling rand()) */
   for (int trial = 0; trial < s.trials; trial++) {
@@ -248,8 +266,12 @@ static SweepSummary RunSweep(const double *p, double countsPerRad, int32_t known
     memset(&plant, 0, sizeof(plant));
     positionTarget = 0;
     RlsInit();
-    RlsStart(256, CONTROL_TICK_HZ);
-    RlsSetPoleAggressiveness(aggressiveness);
+    RlsSetBMaxAtRefQ8(sp.bMaxAtRefQ8);
+    RlsSetGainMaxQ16(sp.gainMaxQ16);
+    RlsSetDeadzone(sp.uMin, sp.vMin);
+    RlsSetDitherPctQ8(sp.ditherPctQ8);
+    RlsStart(sp.lambdaQ8, CONTROL_TICK_HZ);
+    RlsSetPoleAggressiveness(sp.aggressiveness);
     RunMove(&plant, p, countsPerRad, &seedGains, 12345, &positionTarget, 1);
     RunPause(&plant, p, countsPerRad, &seedGains, positionTarget, 500, 1);
     RunMove(&plant, p, countsPerRad, &seedGains, 67890, &positionTarget, 1);
@@ -270,7 +292,7 @@ static SweepSummary RunSweep(const double *p, double countsPerRad, int32_t known
     tunedGains.velGainKpQ8 = RlsGetKpResultQ8();
     tunedGains.velGainKiQ8 = RlsGetKiResultQ8();
     GainGlideState glide;
-    GainGlideStart(&glide, ControlGetGains(), &tunedGains, 2000);
+    GainGlideStart(&glide, ControlGetGains(), &tunedGains, sp.glideMs);
     RunGlide(&plant, p, countsPerRad, positionTarget, &glide);
     ControlReset();
 
@@ -424,7 +446,10 @@ int main(int argc, char **argv) {
                                                          the blog writeup's exploratory data past
                                                          this point came from a temporarily-raised
                                                          clamp, not this shipped example */
-      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, level, level == detailLevel ? detailCsv : NULL);
+      SweepParams sp = kDefaultSweepParams;
+      sp.aggressiveness = level;
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp,
+                                 level == detailLevel ? detailCsv : NULL);
       int exponent = 2;
       for (int32_t i = 0; i < level; i++) exponent *= 2; /* a^(2^(level+1)) */
       fprintf(summaryCsv, "%d,%d,%d,%d,%d,%d\n", level, exponent, s.converged, s.improved,
@@ -435,6 +460,250 @@ int main(int argc, char **argv) {
     fclose(summaryCsv);
     if (detailCsv) fclose(detailCsv);
     printf("wrote %s%s%s\n", argv[2], detailCsv ? " and " : "", argc >= 4 ? argv[3] : "");
+    return 0;
+  }
+
+  /* --lambda-sweep-csv <out.csv>: same 100-random-seed sweep as --sweep-csv,
+   * but holding pole-aggressiveness at its corrected default (5, a^64) and
+   * varying the forgetting factor lambdaQ8 instead. RLS_DEFAULT_LAMBDA_Q8
+   * (Protocol.c) ships at 256 (1.0, no forgetting) -- "the stable default"
+   * per its own comment, never actually swept against the alternative of
+   * forgetting older samples faster. */
+  if (argc >= 3 && strcmp(argv[1], "--lambda-sweep-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "lambda_q8,lambda,converged,improved,beats_known_good,trials\n");
+    const int32_t lambdas[] = {64, 96, 128, 160, 192, 224, 240, 256};
+    for (size_t i = 0; i < sizeof(lambdas) / sizeof(lambdas[0]); i++) {
+      SweepParams sp = kDefaultSweepParams;
+      sp.lambdaQ8 = lambdas[i];
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+      fprintf(csv, "%d,%.4f,%d,%d,%d,%d\n", lambdas[i], lambdas[i] / 256.0, s.converged, s.improved,
+              s.beatsKnownGood, s.trials);
+      printf("lambda_q8=%d (%.4f): %d/%d converged, %d/%d improved, %d/%d beat known-good\n",
+             lambdas[i], lambdas[i] / 256.0, s.converged, s.trials, s.improved, s.converged,
+             s.beatsKnownGood, s.converged);
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --lambda-multiseed-csv <out.csv>: the same lambda sweep repeated at 5
+   * independent RNG seeds, to check whether --lambda-sweep-csv's single-seed
+   * bump at lambda=0.875 is a real effect or sampling noise from reusing one
+   * fixed set of 100 starting points. */
+  if (argc >= 3 && strcmp(argv[1], "--lambda-multiseed-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "rng_seed,lambda_q8,lambda,converged,improved,beats_known_good,trials\n");
+    const int32_t lambdas[] = {64, 96, 128, 160, 192, 224, 240, 256};
+    const uint32_t seeds[] = {0x9e3779b9u, 0x1u, 0xdeadbeefu, 0xc001d00du, 0x13572468u};
+    for (size_t sidx = 0; sidx < sizeof(seeds) / sizeof(seeds[0]); sidx++) {
+      for (size_t i = 0; i < sizeof(lambdas) / sizeof(lambdas[0]); i++) {
+        SweepParams sp = kDefaultSweepParams;
+        sp.lambdaQ8 = lambdas[i];
+        sp.rngSeed = seeds[sidx];
+        SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+        fprintf(csv, "0x%08x,%d,%.4f,%d,%d,%d,%d\n", seeds[sidx], lambdas[i], lambdas[i] / 256.0,
+                s.converged, s.improved, s.beatsKnownGood, s.trials);
+        printf("seed=0x%08x lambda_q8=%d: %d/%d converged, %d/%d beat known-good\n", seeds[sidx],
+               lambdas[i], s.converged, s.trials, s.beatsKnownGood, s.converged);
+      }
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --glide-sweep-csv <out.csv>: same shape, varying the gain-glide duration
+   * instead. RLS_DEFAULT_GLIDE_MS (Protocol.c) ships at 2000ms -- "'resolves
+   * to delightful' should be felt, not [measured]" per its own comment, a
+   * stated-as-subjective default, not a swept one. */
+  if (argc >= 3 && strcmp(argv[1], "--glide-sweep-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "glide_ms,converged,improved,beats_known_good,trials\n");
+    const int32_t glides[] = {100, 250, 500, 1000, 1500, 2000, 3000, 5000};
+    for (size_t i = 0; i < sizeof(glides) / sizeof(glides[0]); i++) {
+      SweepParams sp = kDefaultSweepParams;
+      sp.glideMs = glides[i];
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+      fprintf(csv, "%d,%d,%d,%d,%d\n", glides[i], s.converged, s.improved, s.beatsKnownGood, s.trials);
+      printf("glide_ms=%d: %d/%d converged, %d/%d improved, %d/%d beat known-good\n",
+             glides[i], s.converged, s.trials, s.improved, s.converged, s.beatsKnownGood, s.converged);
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --glide-multiseed-csv <out.csv>: same idea as --lambda-multiseed-csv --
+   * --glide-sweep-csv was already a flat null on one seed; confirms it stays
+   * flat (not just "flat by coincidence of this seed") across independent
+   * seeds too. */
+  if (argc >= 3 && strcmp(argv[1], "--glide-multiseed-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "rng_seed,glide_ms,converged,improved,beats_known_good,trials\n");
+    const int32_t glides[] = {100, 250, 500, 1000, 1500, 2000, 3000, 5000};
+    const uint32_t seeds[] = {0x9e3779b9u, 0x1u, 0xdeadbeefu, 0xc001d00du, 0x13572468u};
+    for (size_t sidx = 0; sidx < sizeof(seeds) / sizeof(seeds[0]); sidx++) {
+      for (size_t i = 0; i < sizeof(glides) / sizeof(glides[0]); i++) {
+        SweepParams sp = kDefaultSweepParams;
+        sp.glideMs = glides[i];
+        sp.rngSeed = seeds[sidx];
+        SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+        fprintf(csv, "0x%08x,%d,%d,%d,%d,%d\n", seeds[sidx], glides[i], s.converged, s.improved,
+                s.beatsKnownGood, s.trials);
+        printf("seed=0x%08x glide_ms=%d: %d/%d converged, %d/%d beat known-good\n", seeds[sidx],
+               glides[i], s.converged, s.trials, s.beatsKnownGood, s.converged);
+      }
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --bmax-multiseed-csv <out.csv>: same idea -- --bmax-sweep-csv was a flat
+   * null across a 64x range on one seed; confirms across independent seeds. */
+  if (argc >= 3 && strcmp(argv[1], "--bmax-multiseed-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "rng_seed,b_max_at_ref_q8,converged,improved,beats_known_good,trials\n");
+    const int32_t bmaxes[] = {8, 16, 32, 48, 64, 96, 128, 256, 512};
+    const uint32_t seeds[] = {0x9e3779b9u, 0x1u, 0xdeadbeefu, 0xc001d00du, 0x13572468u};
+    for (size_t sidx = 0; sidx < sizeof(seeds) / sizeof(seeds[0]); sidx++) {
+      for (size_t i = 0; i < sizeof(bmaxes) / sizeof(bmaxes[0]); i++) {
+        SweepParams sp = kDefaultSweepParams;
+        sp.bMaxAtRefQ8 = bmaxes[i];
+        sp.rngSeed = seeds[sidx];
+        SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+        fprintf(csv, "0x%08x,%d,%d,%d,%d,%d\n", seeds[sidx], bmaxes[i], s.converged, s.improved,
+                s.beatsKnownGood, s.trials);
+        printf("seed=0x%08x b_max_at_ref_q8=%d: %d/%d converged, %d/%d beat known-good\n", seeds[sidx],
+               bmaxes[i], s.converged, s.trials, s.beatsKnownGood, s.converged);
+      }
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --deadzone-multiseed-csv <out.csv>: same idea -- --deadzone-sweep-csv
+   * showed a real-looking downward trend past 1x on one seed; confirms it
+   * across independent seeds (not just the shape, the fact that it holds). */
+  if (argc >= 3 && strcmp(argv[1], "--deadzone-multiseed-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "rng_seed,u_min,v_min,mult,converged,improved,beats_known_good,trials\n");
+    const double mults[] = {0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0};
+    const uint32_t seeds[] = {0x9e3779b9u, 0x1u, 0xdeadbeefu, 0xc001d00du, 0x13572468u};
+    for (size_t sidx = 0; sidx < sizeof(seeds) / sizeof(seeds[0]); sidx++) {
+      for (size_t i = 0; i < sizeof(mults) / sizeof(mults[0]); i++) {
+        SweepParams sp = kDefaultSweepParams;
+        sp.uMin = (int32_t)(50 * mults[i]);
+        sp.vMin = (int32_t)(2 * mults[i]);
+        if (sp.vMin < 1) sp.vMin = 1;
+        sp.rngSeed = seeds[sidx];
+        SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+        fprintf(csv, "0x%08x,%d,%d,%.4f,%d,%d,%d,%d\n", seeds[sidx], sp.uMin, sp.vMin, mults[i],
+                s.converged, s.improved, s.beatsKnownGood, s.trials);
+        printf("seed=0x%08x u_min=%d v_min=%d: %d/%d converged, %d/%d beat known-good\n", seeds[sidx],
+               sp.uMin, sp.vMin, s.converged, s.trials, s.beatsKnownGood, s.converged);
+      }
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --dither-multiseed-csv <out.csv>: same idea as --lambda-multiseed-csv --
+   * --dither-sweep-csv's single-seed run showed a jump at 50% dither that
+   * the lambda check taught us not to trust without independent seeds. */
+  if (argc >= 3 && strcmp(argv[1], "--dither-multiseed-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "rng_seed,dither_pct_q8,dither_pct,converged,improved,beats_known_good,trials\n");
+    const int32_t dithers[] = {0, 1, 3, 7, 13, 26, 51, 102, 128};
+    const uint32_t seeds[] = {0x9e3779b9u, 0x1u, 0xdeadbeefu, 0xc001d00du, 0x13572468u};
+    for (size_t sidx = 0; sidx < sizeof(seeds) / sizeof(seeds[0]); sidx++) {
+      for (size_t i = 0; i < sizeof(dithers) / sizeof(dithers[0]); i++) {
+        SweepParams sp = kDefaultSweepParams;
+        sp.ditherPctQ8 = dithers[i];
+        sp.rngSeed = seeds[sidx];
+        SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+        fprintf(csv, "0x%08x,%d,%.4f,%d,%d,%d,%d\n", seeds[sidx], dithers[i], dithers[i] / 256.0,
+                s.converged, s.improved, s.beatsKnownGood, s.trials);
+        printf("seed=0x%08x dither_pct_q8=%d: %d/%d converged, %d/%d beat known-good\n", seeds[sidx],
+               dithers[i], s.converged, s.trials, s.beatsKnownGood, s.converged);
+      }
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --bmax-sweep-csv <out.csv>: varies RLS_B_MAX_AT_REF_Q8, the b-estimate's
+   * outer sanity ceiling -- explicitly commented "deliberately generous,
+   * bench-TBD guess, not a measured value" in RLS.c, the most clearly
+   * unvalidated default left after pole-aggressiveness/lambda/glide. Default
+   * ships at 64; swept both tighter and looser. */
+  if (argc >= 3 && strcmp(argv[1], "--bmax-sweep-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "b_max_at_ref_q8,converged,improved,beats_known_good,trials\n");
+    const int32_t bmaxes[] = {8, 16, 32, 48, 64, 96, 128, 256, 512};
+    for (size_t i = 0; i < sizeof(bmaxes) / sizeof(bmaxes[0]); i++) {
+      SweepParams sp = kDefaultSweepParams;
+      sp.bMaxAtRefQ8 = bmaxes[i];
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+      fprintf(csv, "%d,%d,%d,%d,%d\n", bmaxes[i], s.converged, s.improved, s.beatsKnownGood, s.trials);
+      printf("b_max_at_ref_q8=%d: %d/%d converged, %d/%d beat known-good\n", bmaxes[i], s.converged,
+             s.trials, s.beatsKnownGood, s.converged);
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --deadzone-sweep-csv <out.csv>: scales RLS_U_MIN/RLS_V_MIN together (same
+   * ratio, 50/2) by a multiplier -- RLS.c's own comment argues these are
+   * correctly NOT tick-rate-scaled (a quantization-noise-floor role, same as
+   * Autotune.c's AUTOTUNE_HYSTERESIS_COUNTS), a reasoned derivation rather
+   * than an ad hoc guess, but never swept either. */
+  if (argc >= 3 && strcmp(argv[1], "--deadzone-sweep-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "u_min,v_min,converged,improved,beats_known_good,trials\n");
+    const double mults[] = {0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0};
+    for (size_t i = 0; i < sizeof(mults) / sizeof(mults[0]); i++) {
+      SweepParams sp = kDefaultSweepParams;
+      sp.uMin = (int32_t)(50 * mults[i]);
+      sp.vMin = (int32_t)(2 * mults[i]);
+      if (sp.vMin < 1) sp.vMin = 1;
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+      fprintf(csv, "%d,%d,%d,%d,%d,%d\n", sp.uMin, sp.vMin, s.converged, s.improved, s.beatsKnownGood,
+              s.trials);
+      printf("u_min=%d v_min=%d: %d/%d converged, %d/%d beat known-good\n", sp.uMin, sp.vMin,
+             s.converged, s.trials, s.beatsKnownGood, s.converged);
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
+    return 0;
+  }
+
+  /* --dither-sweep-csv <out.csv>: varies RLS_DITHER_PCT_Q8. RLS.c's own
+   * comment already claims "as little as 1% already fully corrects the
+   * closed-loop identification bias... flat from there through 50%" --
+   * checked here with the same formal before/after sweep as everything
+   * else, not just the ad hoc check that comment describes. */
+  if (argc >= 3 && strcmp(argv[1], "--dither-sweep-csv") == 0) {
+    FILE *csv = fopen(argv[2], "w");
+    fprintf(csv, "dither_pct_q8,dither_pct,converged,improved,beats_known_good,trials\n");
+    const int32_t dithers[] = {0, 1, 3, 7, 13, 26, 51, 102, 128};
+    for (size_t i = 0; i < sizeof(dithers) / sizeof(dithers[0]); i++) {
+      SweepParams sp = kDefaultSweepParams;
+      sp.ditherPctQ8 = dithers[i];
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, sp, NULL);
+      fprintf(csv, "%d,%.4f,%d,%d,%d,%d\n", dithers[i], dithers[i] / 256.0, s.converged, s.improved,
+              s.beatsKnownGood, s.trials);
+      printf("dither_pct_q8=%d (%.1f%%): %d/%d converged, %d/%d beat known-good\n", dithers[i],
+             100.0 * dithers[i] / 256.0, s.converged, s.trials, s.beatsKnownGood, s.converged);
+    }
+    fclose(csv);
+    printf("wrote %s\n", argv[2]);
     return 0;
   }
 
@@ -595,7 +864,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, 5, NULL);
+  SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, kDefaultSweepParams, NULL);
   printf("\n%d/%d starting points converged (AUTOTUNE_RESULT_OK); %d/%d of those improved cruise "
          "tracking vs. their own seed; %d/%d matched or beat the known-good PC-search gains "
          "(maxErrCruise=%d)\n",
