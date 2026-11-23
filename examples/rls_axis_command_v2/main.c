@@ -513,13 +513,25 @@ int main(int argc, char **argv) {
     /* Move 1: sharp position step, no ramp -- positionTarget jumps once.
      * A short flat pre-roll at target=0 first, so the plot shows an actual
      * step edge (both torque and position starting from a settled zero
-     * baseline) instead of frame 0 already mid-transient. */
+     * baseline) instead of frame 0 already mid-transient. Mirrors real
+     * hardware's `test square position <amp> <half> <half>` exactly: that
+     * signal only runs for ONE half-period (SIGNAL_SQUARE alternates
+     * +amplitude/-amplitude every half-period, but duration==half-period
+     * means it stops after the first +amplitude half and is never active
+     * long enough to reach the -amplitude half) -- once it stops, control
+     * falls through to the normal cascade, which still targets the
+     * pre-test (~0) position.command and pulls the axis back down. So
+     * this is a step UP held for stepTicks, then a return to 0, not a
+     * held stepTicks*2 plateau. */
     positionTarget = 0;
     for (int i = 0; i < 20; i++)
       DemoTick(out,&demo,&plant,p,countsPerRad,positionTarget,0,"preroll");
     positionTarget = stepAmplitude;
-    for (int i = 0; i < stepTicks * 2; i++)
+    for (int i = 0; i < stepTicks; i++)
       DemoTick(out,&demo,&plant,p,countsPerRad,positionTarget,0,"step");
+    positionTarget = 0;
+    for (int i = 0; i < stepTicks; i++)
+      DemoTick(out,&demo,&plant,p,countsPerRad,positionTarget,0,"step-return");
 
     /* 0.3s settle gap, matching capture_moves.py's own pacing between moves. */
     for (int i = 0; i < 300; i++)
