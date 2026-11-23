@@ -1,0 +1,55 @@
+{
+  "schema": "axis-command-model-v1",
+  "status": "frozen provisional empirical model; fresh validation pending",
+  "model": "filtered deadbanded command + constant bias - Stribeck/Coulomb/viscous loss, with stiction",
+  "units": "mechanical radians, seconds; normalized uploaded command, NOT measured current",
+  "encoder_counts_per_rev": 4096,
+  "integration_step_s": 0.0005,
+  "parameters": {
+    "gain_rad_s2_per_command": 13098.725101234855,
+    "bias_rad_s2": -101.84998228344695,
+    "kinetic_rad_s2": 145.04828357597796,
+    "extra_static_rad_s2": 4.787021773151291e-13,
+    "stribeck_speed_rad_s": 1.0203459107725952,
+    "viscous_s_inv": 2.312783922017292,
+    "command_filter_tau_s": 0.00010000000000750207,
+    "command_deadband_fraction": 0.002522114563772704
+  },
+  "training_episodes": 96,
+  "training_sources": [
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-01",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-02",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-03",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-04",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-05",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-batched/batch-06",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-01",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-02",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-03",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-04",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-05",
+    "build/axis-validation/pulse-characterization/axis-higher-coast-plus1pct/batch-06",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-01",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-02",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-03",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-04",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-05",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-06",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-07",
+    "build/axis-validation/pulse-characterization/axis-large-phase-probes-batched/batch-08"
+  ],
+  "initialization": "one quiet initial state per training episode; no per-sample resets",
+  "solver": {
+    "success": true,
+    "message": "`ftol` termination condition is satisfied.",
+    "nfev": 10,
+    "cost": 0.11079963093741038
+  },
+  "limitations": [
+    "no cogging/rotor-angle dependence",
+    "no hysteresis beyond stiction",
+    "effective command scale/filter/deadband not calibrated electronics",
+    "not a three-phase voltage/current simulation",
+    "no fit on reserved or fresh validation"
+  ]
+}
