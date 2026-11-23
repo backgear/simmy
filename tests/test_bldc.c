@@ -203,8 +203,54 @@ static void circuit_property_sweep(void) {
     for (int j=0;j<6;j++) assert(o.switchLossW[j]>=0 && o.diodeLossW[j]>=0);
   }
 }
+static double dc_rl_error(double dt) {
+  /* Same RL step-response check as rl_error(), but through the single-coil
+   * brushed-DC model: no rotor angle, no Clarke scaling, so the exact
+   * solution is the textbook scalar RL charging curve. */
+  SimmyDcParams p={.resistance=.6,.inductance=.002,.backEmfConstant=.08};
+  SimmyDcState s; SimmyDcInit(&s); SimmyDcOutput o;
+  int n=(int)round(.01/dt);
+  for (int i=0;i<n;i++) assert(SimmyDcStep(&s,&p,12,0,dt,&o));
+  double exact=12/.6*(1-exp(-.6/.002*.01));
+  return fabs(s.current-exact);
+}
+static void dc_motor(void) {
+  double e1=dc_rl_error(.0001), e2=dc_rl_error(.00005);
+  assert(e2<e1*.55); /* backward Euler is first order: halving dt roughly halves error */
+
+  SimmyDcParams p={.resistance=.6,.inductance=.002,.backEmfConstant=.08};
+  SimmyDcState s; SimmyDcInit(&s); SimmyDcOutput o;
+  double dt=.0001;
+
+  /* Steady state at nonzero speed: current settles to (V-Ke*speed)/R, where
+   * back EMF opposes the driving voltage regardless of rotor position --
+   * ideal commutation is exactly what makes that true here. */
+  SimmyDcInit(&s);
+  double speed=100, voltage=24;
+  for (int i=0;i<200000;i++) assert(SimmyDcStep(&s,&p,voltage,speed,dt,&o));
+  double steadyCurrent=(voltage-p.backEmfConstant*speed)/p.resistance;
+  near(s.current,steadyCurrent,1e-4);
+  near(o.torque,p.backEmfConstant*steadyCurrent,1e-12);
+  near(o.inputPower,o.torque*speed+o.windingLossW,1e-3); /* settled: no more energy going into L */
+  near(o.numericalLossJ,0,1e-9);
+
+  /* Energy ledger identity, same invariant as the PM/BLDC Ledger() check. */
+  near(s.inputJ-s.mechanicalWorkJ-s.windingHeatJ-.5*p.inductance*s.current*s.current,
+       s.numericalLossJ,2e-6);
+
+  /* Caller-validates convention: invalid params/inputs fail atomically. */
+  SimmyDcParams bad=p; bad.inductance=0; assert(!SimmyDcParamsValid(&bad));
+  bad=p; bad.resistance=-1; assert(!SimmyDcParamsValid(&bad));
+  bad=p; bad.backEmfConstant=-1; assert(!SimmyDcParamsValid(&bad));
+  SimmyDcState saved=s; SimmyDcOutput sentinel; memset(&sentinel,0x42,sizeof(sentinel)); o=sentinel;
+  assert(!SimmyDcStep(&s,&bad,12,0,dt,&o));
+  assert(!memcmp(&s,&saved,sizeof(saved)) && !memcmp(&o,&sentinel,sizeof(o)));
+  assert(!SimmyDcStep(&s,&p,NAN,0,dt,&o));
+  assert(!memcmp(&s,&saved,sizeof(saved)) && !memcmp(&o,&sentinel,sizeof(o)));
+  puts("Brushed DC: RL step response matches closed form; steady current/torque match V-Ke*speed over R.");
+}
 int main(void) {
   equivalence(); bridge_and_freewheel(); delta_circulation(); faults_and_validation(); convergence_and_commutation();
-  circuit_property_sweep();
+  circuit_property_sweep(); dc_motor();
   puts("BLDC/PM circuit, heat and reduction tests passed."); return 0;
 }

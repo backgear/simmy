@@ -101,7 +101,13 @@ static void ChainStep(SimmyChainState *state, const SimmyChainParams *params, do
       double rel = CouplingRelativeDisplacement(state->bodies[i].position, state->bodies[i + 1].position,
                                                  params->couplings[i].backlashGap);
       double relVel = state->bodies[i].velocity - state->bodies[i + 1].velocity;
-      couplingForce[i] = params->couplings[i].springK * rel + params->couplings[i].springD * relVel;
+      double f = params->couplings[i].springK * rel + params->couplings[i].springD * relVel;
+      double limit = params->couplings[i].forceLimit;
+      if (limit > 0.0) {
+        if (f > limit) f = limit;
+        else if (f < -limit) f = -limit;
+      }
+      couplingForce[i] = f;
     }
     for (int i = 0; i < n; i++) {
       double netForce;

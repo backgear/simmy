@@ -109,6 +109,14 @@ typedef struct {
   double backlashGap;   /* counts -- half-width of the dead zone (centered on zero relative
                             displacement) where no force transmits through this coupling.
                             0 disables backlash (a plain spring+damper). */
+  double forceLimit;    /* max magnitude of force this coupling can transmit (springK*rel +
+                            springD*relVel, clamped to +-forceLimit). 0 disables (unlimited,
+                            the previous behavior) -- this is for a friction drive (a V/poly-V
+                            belt, a friction clutch) that slips once demand exceeds what
+                            tension/friction or clamping force can hold; see docs/couplings.
+                            Clamping only bounds the transmitted force -- it does not add a
+                            slip-heat or wear ledger, and it is a constant ceiling, not a
+                            speed-dependent one (a centrifugal clutch needs the latter). */
 } SimmyCouplingParams;
 
 typedef struct {
@@ -343,14 +351,43 @@ int32_t SimmyPulseTrainTickDelta(SimmyPulseTrainState *state, double rateEdgesPe
 
 /* Hand-rolled, scoped to exactly the shape simmy's own config files use
  * (nested objects of numbers/strings/arrays) -- not a general-purpose,
- * hardened JSON parser. See README.md for the config file schema.
+ * hardened JSON parser. See docs/build.md for the config file schema.
  *
- * Both return 0 on success. On failure they return nonzero and, if
- * errMsg is non-NULL, write a human-readable message (truncated to fit
- * errMsgLen, always NUL-terminated). */
+ * All of these return 0 on success. On failure they return nonzero and,
+ * if errMsg is non-NULL, write a human-readable message (truncated to
+ * fit errMsgLen, always NUL-terminated). Each reads its own top-level
+ * section from the file passed in, so one JSON file can describe a
+ * complete scenario: mechanics, analog chain, and motor together. */
 int SimmyChainParamsFromJsonFile(const char *path, SimmyChainParams *out,
                                   char *errMsg, size_t errMsgLen);
 int SimmyAnalogChainParamsFromJsonFile(const char *path, SimmyAnalogChainParams *out,
                                         char *errMsg, size_t errMsgLen);
+/* Reads "stepperMotor". electricalCyclesPerRev is required (>0, no sane
+ * default); detentCyclesPerRev is required only if detentAmplitude != 0. */
+int SimmyStepperParamsFromJsonFile(const char *path, SimmyStepperParams *out,
+                                    char *errMsg, size_t errMsgLen);
+/* Reads "stepperCurrentPath". Every field defaults to 0 (the ideal case). */
+int SimmyStepperCurrentParamsFromJsonFile(const char *path, SimmyStepperCurrentParams *out,
+                                           char *errMsg, size_t errMsgLen);
+/* Reads "inductionMotor"; validated with SimmyInductionParamsValid. */
+int SimmyInductionParamsFromJsonFile(const char *path, SimmyInductionParams *out,
+                                      char *errMsg, size_t errMsgLen);
+/* Reads "bldcMotor" ("connection": "wye"|"delta", "waveform": "sine"|
+ * "trapezoid"); validated with SimmyBldcParamsValid. Fault-injection
+ * fields (openWinding) are examples' territory, not config -- they stay
+ * at their zero/disabled default. */
+int SimmyBldcParamsFromJsonFile(const char *path, SimmyBldcParams *out,
+                                 char *errMsg, size_t errMsgLen);
+/* Reads "bldcBridge"; validated with SimmyBridgeParamsValid. openSwitch
+ * likewise stays at its zero/disabled default -- it's a fault toggle. */
+int SimmyBridgeParamsFromJsonFile(const char *path, SimmyBridgeParams *out,
+                                   char *errMsg, size_t errMsgLen);
+/* Reads "pmMotor" (the reduced two-current PM model, same string values
+ * as bldcMotor's "waveform"); validated with SimmyPmParamsValid. */
+int SimmyPmParamsFromJsonFile(const char *path, SimmyPmParams *out,
+                               char *errMsg, size_t errMsgLen);
+/* Reads "dcMotor" (brushed DC); validated with SimmyDcParamsValid. */
+int SimmyDcParamsFromJsonFile(const char *path, SimmyDcParams *out,
+                               char *errMsg, size_t errMsgLen);
 
 #endif /* SIMMY_H */

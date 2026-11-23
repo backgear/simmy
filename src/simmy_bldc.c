@@ -291,3 +291,38 @@ int SimmyPmStep(SimmyPmState *s, const SimmyPmParams *p, const double v[2],
   *output=o;
   return 1;
 }
+
+int SimmyDcParamsValid(const SimmyDcParams *p) {
+  return p && isfinite(p->resistance) && p->resistance>=0 &&
+      isfinite(p->inductance) && p->inductance>0 &&
+      isfinite(p->backEmfConstant) && p->backEmfConstant>=0;
+}
+void SimmyDcInit(SimmyDcState *s) { memset(s,0,sizeof(*s)); }
+int SimmyDcStep(SimmyDcState *s, const SimmyDcParams *p, double voltage, double speed,
+                double dt, SimmyDcOutput *output) {
+  if (!s || !output || !SimmyDcParamsValid(p) || !isfinite(voltage) ||
+      !isfinite(speed) || !isfinite(dt) || dt<=0 || !isfinite(s->current)) return 0;
+  double next=(p->inductance/dt*s->current+voltage-p->backEmfConstant*speed)/
+      (p->inductance/dt+p->resistance);
+  if (!isfinite(next)) return 0;
+  SimmyDcOutput o={0};
+  o.torque=p->backEmfConstant*next;
+  o.magneticEnergy=.5*p->inductance*next*next;
+  o.windingLossW=p->resistance*next*next;
+  o.inputPower=voltage*next;
+  double change=next-s->current;
+  o.numericalLossJ=.5*p->inductance*change*change;
+  if (!isfinite(o.torque) || !isfinite(o.magneticEnergy) || !isfinite(o.windingLossW) ||
+      !isfinite(o.inputPower) || !isfinite(o.numericalLossJ)) return 0;
+  SimmyDcState result=*s;
+  result.current=next;
+  result.windingHeatJ+=dt*o.windingLossW;
+  result.inputJ+=dt*o.inputPower;
+  result.mechanicalWorkJ+=dt*o.torque*speed;
+  result.numericalLossJ+=o.numericalLossJ;
+  if (!isfinite(result.windingHeatJ) || !isfinite(result.inputJ) ||
+      !isfinite(result.mechanicalWorkJ) || !isfinite(result.numericalLossJ)) return 0;
+  *s=result;
+  *output=o;
+  return 1;
+}

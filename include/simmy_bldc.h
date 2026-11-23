@@ -108,4 +108,29 @@ int SimmyPmStep(SimmyPmState *state, const SimmyPmParams *params,
                  const double voltage[2], double angle, double speed, double dt,
                  SimmyPmOutput *output);
 
+/* Brushed DC: a real brush/commutator pair keeps the winding facing the
+ * magnet always energized the same way, so -- unlike every other motor
+ * here -- torque and back EMF don't depend on rotor angle at all. That
+ * collapses the model to Kirchhoff's voltage law on a single winding.
+ * backEmfConstant is this motor's Ke and Kt at once: Nm/A == V*s/rad in
+ * consistent SI units, the same invariant the other PM models use. */
+typedef struct {
+  double resistance;      /* ohms, >=0 */
+  double inductance;      /* H, >0 */
+  double backEmfConstant; /* Nm/A == V*s/rad */
+} SimmyDcParams;
+typedef struct {
+  double current;                                                /* A */
+  double windingHeatJ, inputJ, mechanicalWorkJ, numericalLossJ;   /* J, cumulative */
+} SimmyDcState;
+typedef struct {
+  double torque, magneticEnergy, windingLossW, inputPower, numericalLossJ;
+} SimmyDcOutput;
+int SimmyDcParamsValid(const SimmyDcParams *params);
+void SimmyDcInit(SimmyDcState *state);
+/* Backward Euler, held speed over dt>0. Returns 0 on invalid input,
+ * leaves state AND output unchanged -- same convention as SimmyPmStep. */
+int SimmyDcStep(SimmyDcState *state, const SimmyDcParams *params,
+                double voltage, double speed, double dt, SimmyDcOutput *output);
+
 #endif

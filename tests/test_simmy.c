@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "simmy.h"
@@ -170,10 +171,50 @@ static void test_two_body_free_oscillation_decays(void) {
   for (int i = 0; i < ticks; i++) {
     SimmyChainStep(&state, &params, 0.0);
     double rel = fabs(state.bodies[0].position - state.bodies[1].position);
+    /* A reversed coupling sign diverges to +-inf, then NaN -- and NaN
+     * compares false against everything, so "rel > maxRelFirst"/
+     * "rel > maxRelLast" both silently stop updating once rel goes
+     * NaN rather than ever becoming true. That leaves maxRelLast frozen
+     * at 0 (its initial value) and maxRelFirst frozen at whatever it
+     * reached before going NaN -- and 0 < anything positive, so the
+     * assert below would still "pass" even though the system diverged.
+     * Catch that case directly instead of trusting the two maxes alone. */
+    assert(isfinite(rel));
     if (i < 100 && rel > maxRelFirst) maxRelFirst = rel;
     if (i >= ticks - 100 && rel > maxRelLast) maxRelLast = rel;
   }
   assert(maxRelLast < maxRelFirst);
+}
+
+/* The free-oscillation test above proves stability, not sign -- it
+ * would (after the isfinite fix) also fail on a reversed sign, but
+ * only because divergence happens to blow up to infinity before 2000
+ * ticks elapse, which is a numerical accident of these particular
+ * parameters, not a direct check of the thing we actually care about.
+ * Check the sign directly instead, from a single step: with body0
+ * ahead of body1 (rel > 0) and no damping to confuse the reading, a
+ * restoring coupling must decelerate body0 (pull it back) and
+ * accelerate body1 (pull it forward) -- each toward the other. A
+ * Newton's-third-law sign flip in ChainStep (applying the coupling
+ * force with the same sign to both bodies instead of opposite signs)
+ * produces exactly the opposite of both checks below. */
+static void test_two_body_coupling_pulls_together_not_apart(void) {
+  SimmyChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.bodyCount = 2;
+  params.bodies[0].inertia = 10.0;
+  params.bodies[1].inertia = 10.0;
+  params.couplings[0].springK = 5.0;
+  params.subSteps = 1;
+
+  SimmyChainState state;
+  SimmyChainInit(&state, &params);
+  state.bodies[0].position = 10.0; /* rel = +10: body0 ahead of body1 */
+
+  SimmyChainStep(&state, &params, 0.0);
+
+  assert(state.bodies[0].velocity < 0.0); /* pulled back toward body1 */
+  assert(state.bodies[1].velocity > 0.0); /* pulled forward toward body0 */
 }
 
 /* Drives body 0 forward (loading the coupling onto the "forward" side of
@@ -211,6 +252,38 @@ static void test_two_body_backlash_creates_dead_zone_on_reversal(void) {
     if (fabs(rel) < params.couplings[0].backlashGap) sawDeadZone = 1;
   }
   assert(sawDeadZone);
+}
+
+/* With springK alone (no backlash), a strong enough drive on body0 would
+ * normally just stretch the spring harder and harder, transmitting
+ * whatever force the spring law computes -- unbounded, as in
+ * test_two_body_free_oscillation_decays scaled up. A forceLimit caps
+ * that at a constant ceiling instead: once the spring force would
+ * exceed it, the coupling behaves like a friction drive past its slip
+ * point -- body1 accelerates at exactly forceLimit/inertia, and the
+ * bodies' relative velocity grows without bound rather than settling
+ * into a bounded oscillation. */
+static void test_two_body_force_limit_caps_transmission(void) {
+  SimmyChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.bodyCount = 2;
+  params.bodies[0].inertia = 10.0;
+  params.bodies[1].inertia = 10.0;
+  params.couplings[0].springK = 1000.0;
+  params.couplings[0].forceLimit = 2.0;
+  params.subSteps = 20;
+
+  SimmyChainState state;
+  SimmyChainInit(&state, &params);
+
+  int ticks = 500;
+  for (int i = 0; i < ticks; i++) SimmyChainStep(&state, &params, 100.0);
+
+  double expectedVel1 = params.couplings[0].forceLimit / params.bodies[1].inertia * ticks;
+  assert(fabs(state.bodies[1].velocity - expectedVel1) < expectedVel1 * 0.05);
+
+  double relVel = state.bodies[0].velocity - state.bodies[1].velocity;
+  assert(relVel > 5.0); /* still slipping, nowhere near locked together */
 }
 
 /* ---- analog signal chain ------------------------------------------------ */
@@ -293,6 +366,16 @@ static void WriteFile(const char *path, const char *contents) {
   fclose(f);
 }
 
+/* Builds a path under $TMPDIR (falling back to /tmp if unset), rather than
+ * hardcoding /tmp: some sandboxed environments only allow writes under
+ * $TMPDIR. Returns buf for convenient use as a call argument. */
+static const char *TestTmpPath(char *buf, size_t bufSize, const char *name) {
+  const char *dir = getenv("TMPDIR");
+  if (!dir || !dir[0]) dir = "/tmp";
+  snprintf(buf, bufSize, "%s/%s", dir, name);
+  return buf;
+}
+
 static void test_json_loads_two_body_config(void) {
   const char *json =
       "{\n"
@@ -300,25 +383,28 @@ static void test_json_loads_two_body_config(void) {
       "    {\"inertia\": 64, \"friction\": 0.02, \"rippleAmplitude\": 60, \"ripplePeriodCounts\": 20},\n"
       "    {\"inertia\": 8, \"friction\": 0.01, \"stictionLimit\": 80, \"coulombLevel\": 50}\n"
       "  ],\n"
-      "  \"couplings\": [ {\"springK\": 3.16, \"springD\": 1.0, \"backlashGap\": 0.5} ],\n"
+      "  \"couplings\": [ {\"springK\": 3.16, \"springD\": 1.0, \"backlashGap\": 0.5, \"forceLimit\": 12.0} ],\n"
       "  \"feedbackBody\": 0,\n"
       "  \"subSteps\": 20,\n"
       "  \"analogChain\": [ {\"type\": \"lag\", \"param0\": 0.6} ]\n"
       "}\n";
-  WriteFile("/tmp/simmy_test_config.json", json);
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_config.json");
+  WriteFile(path, json);
 
   SimmyChainParams params;
   char err[256] = {0};
-  int rc = SimmyChainParamsFromJsonFile("/tmp/simmy_test_config.json", &params, err, sizeof(err));
+  int rc = SimmyChainParamsFromJsonFile(path, &params, err, sizeof(err));
   assert(rc == 0);
   assert(params.bodyCount == 2);
   assert(params.bodies[0].inertia == 64.0);
   assert(params.bodies[1].stictionLimit == 80.0);
   assert(params.couplings[0].springK == 3.16);
+  assert(params.couplings[0].forceLimit == 12.0);
   assert(params.subSteps == 20);
 
   SimmyAnalogChainParams analogParams;
-  rc = SimmyAnalogChainParamsFromJsonFile("/tmp/simmy_test_config.json", &analogParams, err, sizeof(err));
+  rc = SimmyAnalogChainParamsFromJsonFile(path, &analogParams, err, sizeof(err));
   assert(rc == 0);
   assert(analogParams.stageCount == 1);
   assert(analogParams.stages[0].type == SIMMY_STAGE_LAG);
@@ -328,17 +414,171 @@ static void test_json_loads_two_body_config(void) {
 static void test_json_reports_missing_file(void) {
   SimmyChainParams params;
   char err[256] = {0};
-  int rc = SimmyChainParamsFromJsonFile("/tmp/this_file_does_not_exist.json", &params, err, sizeof(err));
+  char path[512];
+  TestTmpPath(path, sizeof(path), "this_file_does_not_exist.json");
+  int rc = SimmyChainParamsFromJsonFile(path, &params, err, sizeof(err));
   assert(rc != 0);
   assert(err[0] != '\0');
 }
 
 static void test_json_requires_positive_inertia(void) {
-  WriteFile("/tmp/simmy_test_bad_inertia.json", "{\"bodies\": [{\"friction\": 0.1}]}");
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_bad_inertia.json");
+  WriteFile(path, "{\"bodies\": [{\"friction\": 0.1}]}");
   SimmyChainParams params;
   char err[256] = {0};
-  int rc = SimmyChainParamsFromJsonFile("/tmp/simmy_test_bad_inertia.json", &params, err, sizeof(err));
+  int rc = SimmyChainParamsFromJsonFile(path, &params, err, sizeof(err));
   assert(rc != 0);
+}
+
+static void test_json_loads_stepper_motor(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_stepper.json");
+  WriteFile(path,
+      "{\"stepperMotor\": {\"electricalCyclesPerRev\": 50, \"torqueConstant\": 0.4,\n"
+      "  \"detentAmplitude\": 0.012, \"detentCyclesPerRev\": 200},\n"
+      " \"stepperCurrentPath\": {\"gainError\": [0.03, -0.03], \"offset\": [0.01, -0.015]}}\n");
+
+  SimmyStepperParams motor;
+  char err[256] = {0};
+  int rc = SimmyStepperParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc == 0);
+  assert(motor.electricalCyclesPerRev == 50);
+  assert(motor.torqueConstant == 0.4);
+  assert(motor.detentAmplitude == 0.012);
+  assert(motor.detentCyclesPerRev == 200);
+
+  SimmyStepperCurrentParams currentPath;
+  rc = SimmyStepperCurrentParamsFromJsonFile(path, &currentPath, err, sizeof(err));
+  assert(rc == 0);
+  assert(currentPath.gainError[0] == 0.03);
+  assert(currentPath.offset[1] == -0.015);
+  assert(currentPath.quantizeStep[0] == 0.0); /* omitted -> ideal default */
+}
+
+static void test_json_requires_stepper_electrical_cycles(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_stepper_bad.json");
+  WriteFile(path, "{\"stepperMotor\": {\"torqueConstant\": 0.4}}");
+  SimmyStepperParams motor;
+  char err[256] = {0};
+  int rc = SimmyStepperParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc != 0);
+  assert(err[0] != '\0');
+}
+
+static void test_json_requires_detent_cycles_when_amplitude_set(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_stepper_bad_detent.json");
+  WriteFile(path, "{\"stepperMotor\": {\"electricalCyclesPerRev\": 50, \"detentAmplitude\": 0.012}}");
+  SimmyStepperParams motor;
+  char err[256] = {0};
+  int rc = SimmyStepperParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc != 0);
+}
+
+static void test_json_loads_induction_motor(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_induction.json");
+  WriteFile(path,
+      "{\"inductionMotor\": {\"polePairs\": 2, \"statorResistance\": 3, \"rotorResistance\": 2,\n"
+      "  \"statorLeakageInductance\": 0.01, \"rotorLeakageInductance\": 0.01,\n"
+      "  \"magnetizingInductance\": 0.18}}\n");
+  SimmyInductionParams motor;
+  char err[256] = {0};
+  int rc = SimmyInductionParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc == 0);
+  assert(motor.polePairs == 2);
+  assert(motor.magnetizingInductance == 0.18);
+  assert(SimmyInductionParamsValid(&motor));
+}
+
+static void test_json_rejects_induction_motor_missing_inductance(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_induction_bad.json");
+  WriteFile(path, "{\"inductionMotor\": {\"polePairs\": 2, \"statorResistance\": 3, \"rotorResistance\": 2}}");
+  SimmyInductionParams motor;
+  char err[256] = {0};
+  int rc = SimmyInductionParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc != 0); /* leakage/magnetizing inductance default to 0, which is invalid (must be > 0) */
+  assert(err[0] != '\0');
+}
+
+static void test_json_loads_bldc_motor_and_bridge(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_bldc.json");
+  WriteFile(path,
+      "{\"bldcMotor\": {\"polePairs\": 4, \"connection\": \"wye\", \"waveform\": \"trapezoid\",\n"
+      "  \"resistance\": [0.6, 0.6, 0.6], \"inductance\": [0.002, 0.002, 0.002],\n"
+      "  \"backEmfConstant\": [0.08, 0.08, 0.08]},\n"
+      " \"bldcBridge\": {\"busVoltage\": 24, \"diodeDrop\": 0.6,\n"
+      "  \"onResistance\": [0.04, 0.04, 0.04, 0.04, 0.04, 0.04]}}\n");
+
+  SimmyBldcParams motor;
+  char err[256] = {0};
+  int rc = SimmyBldcParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc == 0);
+  assert(motor.polePairs == 4);
+  assert(motor.connection == SIMMY_WYE);
+  assert(motor.waveform == SIMMY_PM_TRAPEZOID);
+  assert(motor.inductance[1] == 0.002);
+  assert(SimmyBldcParamsValid(&motor));
+
+  SimmyBridgeParams bridge;
+  rc = SimmyBridgeParamsFromJsonFile(path, &bridge, err, sizeof(err));
+  assert(rc == 0);
+  assert(bridge.busVoltage == 24.0);
+  assert(bridge.onResistance[3] == 0.04);
+  assert(SimmyBridgeParamsValid(&bridge));
+}
+
+static void test_json_rejects_bad_bldc_connection_string(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_bldc_bad.json");
+  WriteFile(path, "{\"bldcMotor\": {\"polePairs\": 4, \"connection\": \"star\", \"inductance\": [0.002, 0.002, 0.002]}}");
+  SimmyBldcParams motor;
+  char err[256] = {0};
+  int rc = SimmyBldcParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc != 0);
+  assert(err[0] != '\0');
+}
+
+static void test_json_loads_pm_motor(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_pm.json");
+  WriteFile(path,
+      "{\"pmMotor\": {\"polePairs\": 4, \"waveform\": \"trapezoid\", \"resistance\": 0.6,\n"
+      "  \"inductance\": 0.002, \"backEmfConstant\": 0.08}}\n");
+  SimmyPmParams motor;
+  char err[256] = {0};
+  int rc = SimmyPmParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc == 0);
+  assert(motor.waveform == SIMMY_PM_TRAPEZOID);
+  assert(SimmyPmParamsValid(&motor));
+}
+
+static void test_json_loads_dc_motor(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_dc.json");
+  WriteFile(path, "{\"dcMotor\": {\"resistance\": 0.6, \"inductance\": 0.002, \"backEmfConstant\": 0.08}}");
+  SimmyDcParams motor;
+  char err[256] = {0};
+  int rc = SimmyDcParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc == 0);
+  assert(motor.resistance == 0.6);
+  assert(motor.inductance == 0.002);
+  assert(SimmyDcParamsValid(&motor));
+}
+
+static void test_json_rejects_dc_motor_missing_inductance(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_dc_bad.json");
+  WriteFile(path, "{\"dcMotor\": {\"resistance\": 0.6, \"backEmfConstant\": 0.08}}");
+  SimmyDcParams motor;
+  char err[256] = {0};
+  int rc = SimmyDcParamsFromJsonFile(path, &motor, err, sizeof(err));
+  assert(rc != 0); /* inductance defaults to 0, which is invalid (must be > 0) */
+  assert(err[0] != '\0');
 }
 
 /* ---- closed-loop sanity with the demo controller ------------------------ */
@@ -372,7 +612,9 @@ int main(void) {
   test_friction_bump_is_localized_and_measurable();
   test_ripple_is_periodic_in_position_not_time();
   test_two_body_free_oscillation_decays();
+  test_two_body_coupling_pulls_together_not_apart();
   test_two_body_backlash_creates_dead_zone_on_reversal();
+  test_two_body_force_limit_caps_transmission();
   test_analog_chain_composes_stages_in_order();
   test_analog_chain_lag_responds_gradually();
   test_pulse_train_negative_rate_is_symmetric_to_positive();
@@ -381,6 +623,16 @@ int main(void) {
   test_json_loads_two_body_config();
   test_json_reports_missing_file();
   test_json_requires_positive_inertia();
+  test_json_loads_stepper_motor();
+  test_json_requires_stepper_electrical_cycles();
+  test_json_requires_detent_cycles_when_amplitude_set();
+  test_json_loads_induction_motor();
+  test_json_rejects_induction_motor_missing_inductance();
+  test_json_loads_bldc_motor_and_bridge();
+  test_json_rejects_bad_bldc_connection_string();
+  test_json_loads_pm_motor();
+  test_json_loads_dc_motor();
+  test_json_rejects_dc_motor_missing_inductance();
   test_closed_loop_with_demo_controller_converges();
   printf("All simmy tests passed.\n");
   return 0;
