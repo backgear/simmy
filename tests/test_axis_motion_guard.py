@@ -22,6 +22,19 @@ class MotionPauseTests(unittest.TestCase):
             with patch('axis_motion_guard.PAUSE_FILE',p),patch('os.open') as opened:
                 with self.assertRaisesRegex(RuntimeError,'paused'):HardwareBackend(Path(d),'/not-a-port','unused')
                 opened.assert_not_called()
+    def test_adapter_cli_blocks_before_serial_open(self):
+        import contextlib
+        import io
+        import axis_adapter
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'pause.json';p.write_text('{}')
+            with patch('axis_motion_guard.PAUSE_FILE',p), \
+                 patch.object(sys,'argv',['axis_adapter.py','--plan','unused','--output','unused']), \
+                 patch('axis_adapter.wire.open_serial') as opened, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as stopped:axis_adapter.main()
+                self.assertEqual(stopped.exception.code,1)
+                opened.assert_not_called()
     def test_arm_start_block_before_transport_state_or_writes(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/'pause.json';p.write_text('{}')

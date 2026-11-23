@@ -431,6 +431,8 @@ def main():
     parser.add_argument('--port')
     args = parser.parse_args()
     try:
+        from axis_motion_guard import require_motion_unpaused
+        require_motion_unpaused()
         config, port = load_config(args)
         read_fn, write_fn, close_fn = wire.open_serial(port)
         try:
