@@ -405,13 +405,15 @@ int main(int argc, char **argv) {
     printf("known-good PC-search gains (Pv=64000 Iv=4096): maxErrCruise=%d\n", knownGoodCruise);
   }
 
-  /* --sweep-csv writes the blog-post data: a summary row per
-   * sPoleAggressiveness level (0=a^2 .. 4=a^32) in the first file, and the
-   * full 100-trial detail for level 3 (a^16, what this repo actually uses)
-   * in the second -- see examples/rls_axis_command_v2/plot_sweep.py. */
+  /* --sweep-csv <summary.csv> [detail.csv] [detailLevel]: writes the blog-post
+   * data -- a summary row per sPoleAggressiveness level (0=a^2 .. 6=a^128) in
+   * the first file, and the full 100-trial detail for ONE chosen level (5 =
+   * a^64, this repo's shipped default, unless detailLevel says otherwise) in
+   * the second -- see examples/rls_axis_command_v2/plot_sweep.py. */
   if (argc >= 3 && strcmp(argv[1], "--sweep-csv") == 0) {
     FILE *summaryCsv = fopen(argv[2], "w");
     FILE *detailCsv = (argc >= 4) ? fopen(argv[3], "w") : NULL;
+    int32_t detailLevel = (argc >= 5) ? atoi(argv[4]) : 5;
     fprintf(summaryCsv, "aggressiveness,exponent,converged,improved,beats_known_good,trials\n");
     if (detailCsv) {
       fprintf(detailCsv,
@@ -422,7 +424,7 @@ int main(int argc, char **argv) {
                                                          the blog writeup's exploratory data past
                                                          this point came from a temporarily-raised
                                                          clamp, not this shipped example */
-      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, level, level == 5 ? detailCsv : NULL);
+      SweepSummary s = RunSweep(p, countsPerRad, knownGoodCruise, level, level == detailLevel ? detailCsv : NULL);
       int exponent = 2;
       for (int32_t i = 0; i < level; i++) exponent *= 2; /* a^(2^(level+1)) */
       fprintf(summaryCsv, "%d,%d,%d,%d,%d,%d\n", level, exponent, s.converged, s.improved,
