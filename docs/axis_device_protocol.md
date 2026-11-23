@@ -14,13 +14,58 @@ analog measurements and digital status inputs. A typical fit needs two encoders
 (motor/load) and actual effort. Commanded pulse count is never measured position.
 
 A run is finite and completely uploaded before execution. USB latency never
-changes move timing. Capture can remain entirely in device memory until the run
-finishes. Streaming during execution is optional, not required by v1. No firmware
-or host may assume that digital compression always achieves a particular ratio.
+changes move timing. Capture data MAY be pushed off the device continuously
+during RUNNING instead of buffered whole and retrieved afterward -- see
+"Acquisition and lossless encoding" below; a device that does this still owes
+the host a way to confirm nothing was lost (a per-stream sequence number) and
+an authoritative final count/hash (GET_RUN), whichever retrieval style it
+uses. No firmware or host may assume that digital compression always achieves
+a particular ratio.
 
 Normative words MUST/SHOULD describe the proposed interoperability contract.
 All example limits, rates, and amplitudes must come from machine configuration;
 there are no universal safe defaults.
+
+## Blue Pill firmware 0.2.0: live position-servo extension
+
+The implemented Blue Pill additionally advertises `analog_position_servo` in
+HELLO. This is not raw `analog_effort`: uploaded signed integers are **encoder
+position references relative to ARM**, and the MCU runs the snapshotted production
+`analog-servo` `Control.c` at 1 kHz to produce effort from encoder0 feedback.
+PC-side tuning chooses gains only between finite runs; USB does not time feedback.
+
+In addition to the ordinary manifest fields, this mode requires these integer
+fields (included in its canonical manifest hash):
+
+| Field | Supported range / units |
+|---|---|
+| `servo_position_kp_q8` | 1..256, raw Q8.8 |
+| `servo_velocity_kp_q8` | 1..1048576, raw Q8.8 |
+| `servo_velocity_ki_q8` | 0..1048576, raw Q8.8 per control tick |
+| `servo_torque_limit_code` | 1..6553, signed output magnitude cap; FS=32767 |
+| `servo_error_limit_counts` | 1..4096, following-error guard |
+| `servo_velocity_clamp` | 1..32, target counts per 1 ms tick |
+
+This mode requires `drive_interpretation=position`, encoder0 enabled/non-inverted
+with a positive travel guard, supervised connection, `output_enable_used=false`,
+`analog_enabled=false`, full scale 32767, encoder sample period dividing 1000
+(and no greater than 1000), telemetry period 1000, and command/pre-roll periods
+in integer milliseconds. References have magnitude at most 4096 counts and zero
+endpoints. Non-servo canonical manifests retain their prior representation.
+
+**Stream 2 is virtual servo telemetry, not ADC:** two raw signed i32 channels,
+`[effort_code, reference_count]`, sampled at 1 kHz, with GET_RUN role
+`servo_effort_reference`. It is enabled in this mode despite `analog_enabled=false`;
+no `analogRead()` is performed. Encoder0 remains the independently hashed i64
+count stream. During pre/post-roll, effort is zero. After the finite reference
+schedule, the position loop stops and output stays zero; this is not continued
+active holding/braking. HELLO exposes the controller source identity for host
+compatibility checking. Capture validation failures preserve terminal state;
+normal operation never automatically clears a fault and retries motion.
+
+A drive's physical jumper can keep it enabled independently of the MCU output.
+Zero effort is not braking or electrical isolation. See
+[controller development](axis_controller_development.md) for the measured example.
 
 ## Wire framing
 
@@ -105,13 +150,21 @@ from different boot_id values cannot be joined silently.
 7. Poll **STATUS** or listen for state events. **KEEPALIVE** renews the configured
    watchdog lease. USB carries supervision, not sample timing. **ABORT** is always
    accepted for the current run and schedules the configured safe action.
-8. **GET_RUN** returns immutable manifest, hashes, stream descriptors, segment
-   boundaries, start/end ticks, faults, completeness, and block counts. Data can
-   be retrieved after COMPLETE or FAULT. Partial/faulted data remains diagnostic;
-   it MUST NOT be silently treated as a successful identification run.
-9. **GET_BLOCK** `{run_id, stream_id, block_index}` returns one DATA frame, or an
-   error if unavailable. Repeated reads return identical bytes. Host verifies
-   all blocks, counts, and timing before converting to analysis CSV.
+8. Capture data arrives as unsolicited **DATA** frames (sequence=0, "0 reserved
+   for unsolicited events"), pushed continuously from the device while RUNNING
+   as each small chunk is ready -- not pulled by the host after the fact. A
+   device that buffers a whole run instead of pushing MAY still serve it this
+   way, as one large push burst once capture completes; the host-side contract
+   (chunk framing, per-stream sequence number, final GET_RUN cross-check) is
+   the same either way. See "Acquisition and lossless encoding" for the frame
+   shape and gap detection.
+9. **GET_RUN** returns immutable manifest, hashes, stream descriptors, segment
+   boundaries, start/end ticks, faults, and completeness, once COMPLETE or
+   FAULT. This is the authoritative final record -- compare its per-stream
+   sample count, pushed-frame count, and sha256 against what was actually
+   received via the continuous pushes above before trusting the result.
+   Partial/faulted data remains diagnostic; it MUST NOT be silently treated as
+   a successful identification run.
 10. **CLEAR** `{run_id}` explicitly releases buffers. A disconnect MUST NOT erase
     completed data; reset/power loss may erase volatile data and changes boot_id.
 
@@ -134,7 +187,7 @@ The manifest MUST define:
   motor/load/intermediate role, calibrated relative offsets and transmission ratios;
 - selected analog channels, raw-to-physical scale/offset/unit, effort calibration
   or phase-current/rotor electrical-angle model reference;
-- capture stream sample periods, channel order, selected codec/block sizes;
+- capture stream sample periods, channel order, selected codec/chunk sizes;
 - segment names and half-open command-index ranges, including `validation`;
 - permitted command range/rate, travel/velocity limits in encoder coordinates,
   current/effort limits if available, monitored faults/interlocks, watchdog timeout,
@@ -183,31 +236,43 @@ accuracy. Counter snapshot skew, ADC apertures, and analog frontend delays must
 be characterized/reported; '100 kHz' alone is not a synchronization specification.
 
 Each stream has a fixed sample period and ordered channels. The host can request
-100 kHz if supported, independently of command rate. Device buffering MUST
-prevent silent loss. SEAL checks a conservative storage budget including block
-headers and worst-case codec expansion, or rejects the plan. Implementations may
-fall back to raw encoding per block. Compression is not a capacity guarantee.
-Any runtime overflow or missed acquisition tick faults the run and marks its
-recording incomplete. Safety shutdown takes priority over capture.
+100 kHz if supported, independently of command rate. A device need not buffer a
+whole run at all: pushing each small captured chunk off continuously during
+RUNNING (reusing the transport's own small send queue, e.g. USB CDC's) keeps
+capture length bounded by host/transport drain rate and run duration rather
+than device memory, which is the point for anything beyond a few seconds at a
+useful sample rate. A device that still buffers a whole run in memory MAY do
+so instead and push it as one burst at the end -- the wire shape below is the
+same either way. Whichever approach, device buffering (however small) MUST
+prevent silent loss: falling behind is a real OVERFLOW fault, not a dropped
+chunk the host is left to notice on its own. SEAL still checks a conservative
+upload-side storage budget (the command buffer); it does not bound capture
+length when capture isn't buffered. Compression is not a capacity guarantee
+either way. Safety shutdown takes priority over capture.
 
 DATA payload begins with this 24-byte prefix:
 
 | Offset | Type | Field |
 |---|---|---|
 | 0 | u32 | stream_id |
-| 4 | u32 | block_index, starting at zero |
+| 4 | u32 | this stream's own push-sequence counter, starting at zero |
 | 8 | u64 | first_sample_tick, absolute device clock |
 | 16 | u32 | sample_count, positive |
 | 20 | u8 | codec: 1=raw_i64, 2=delta_rle_i32, 3=raw_i32 |
 | 21 | 3 bytes | reserved, zero |
 
 Channel count/order and sample period come from GET_RUN. Consecutive sample ticks
-are `first_sample_tick + k*period_ticks`. Blocks have no overlap or gaps within a
-stream. Streams may have different periods and aperture offsets. A final block
-may be shorter. Sum of block sample counts MUST equal GET_RUN's captured count.
-Wire CRC protects every block transfer. GET_RUN also supplies SHA-256 per stream
-over the concatenated **uncompressed sample-major little-endian raw values**,
-so missing/reordered blocks or decoding errors are detectable after retrieval.
+within a chunk are `first_sample_tick + k*period_ticks`. Chunks have no overlap
+or gaps within a stream and arrive in sequence order; the host detects a lost or
+reordered chunk directly from a skip in that counter, without waiting for
+GET_RUN. Streams may have different periods, aperture offsets, and chunk sizes.
+A final chunk may be shorter. Sum of chunk sample counts MUST equal GET_RUN's
+captured count, and the number of chunks actually received MUST equal GET_RUN's
+pushed-frame count for that stream. Wire CRC protects every chunk transfer.
+GET_RUN also supplies SHA-256 per stream over the concatenated **uncompressed
+sample-major little-endian raw values** (fed incrementally as chunks are sent,
+not recomputed from a stored buffer), so missing/reordered chunks or decoding
+errors are detectable even if a sequence number were somehow also wrong.
 
 Codec 1: sample-major i64 values, exactly `sample_count * channels * 8` bytes.
 Used for encoder counts and optionally actual digital command counters.
@@ -217,9 +282,9 @@ records of `repeat:u32` followed by `channels` signed i32 count deltas. Each rec
 applies the delta vector repeatedly to generate `repeat` successive samples.
 `repeat` MUST be positive; sum of repeats MUST be `sample_count-1`. A single
 constant region is one record with zero deltas; repeated constant-velocity count
-increments also compress. Records never depend on a previous block. Integer
+increments also compress. Records never depend on a previous chunk. Integer
 addition MUST be checked for i64 overflow. Deltas that do not fit i32 require a
-raw block. This is RLE of sampled count increments, not sampled A/B logic levels:
+raw chunk. This is RLE of sampled count increments, not sampled A/B logic levels:
 all intermediate raw edges are not preserved, but every sampled count is exact.
 
 Codec 3: sample-major signed i32 raw analog/status/DAC values, exactly
@@ -321,7 +386,7 @@ requirements here, not yet implemented by the current validation-only prototype.
 
 Firmware and host implementations should share golden vectors for framing/CRC,
 partial USB reads, large signed counts, RLE reconstruction, stream hashing,
-corrupt/missing/reordered blocks, command polarity/timing, and tick offsets.
+corrupt/missing/reordered chunks, command polarity/timing, and tick offsets.
 Exercise interrupted uploads, duplicate chunks, lost START response, disconnects,
 watchdog/limit trips, capture overflow, and reset during a run. Verify pulses and
 sampling synchronization on a logic analyzer. Then exercise the complete upload →

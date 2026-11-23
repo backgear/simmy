@@ -1,0 +1,28 @@
+/* Separate section labels from their pages. Material indents each nested
+   list; give every descendant link the same additional padding so deeper
+   pages keep that indentation instead of jumping back toward the margin. */
+
+.md-nav__item--section > .md-nav__link {
+  font-size: .68rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+  text-decoration: none;
+}
+
+/* Undo Material's negative section offset, in either text direction. */
+.md-nav--primary .md-nav__item--section > .md-nav {
+  margin-inline-start: 0;
+}
+
+.md-nav--primary .md-nav__item--section > .md-nav .md-nav__link {
+  padding-inline-start: 1.1rem;
+  color: var(--md-default-fg-color--light);
+  text-decoration: none;
+}
+
+.md-nav--primary .md-nav__item--section > .md-nav .md-nav__link:hover,
+.md-nav--primary .md-nav__item--section > .md-nav .md-nav__link--active {
+  color: var(--md-accent-fg-color);
+  text-decoration: none;
+}

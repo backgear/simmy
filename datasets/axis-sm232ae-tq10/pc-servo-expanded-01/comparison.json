@@ -1,0 +1,218 @@
+{
+  "schema": "axis-pc-tuning-comparison-v1",
+  "hardware_comparison_done": true,
+  "frozen_model_sha256": "49585d24c9666e51464c55183c6b59c98da276c69b55516b270e189ce7c862c1",
+  "controller_identity": "375c6bc4f2337e3ed01e8100d5566490d7e467fe39bd7b230f76d9b7595bf5b2",
+  "report_source_sha256": "b068be6f8f057cc6929ea9e1540783ebfd0f92baa8b21fb18294db2c1b6a56df",
+  "input_paths": {
+    "sim": "build/axis-validation/pc-servo-sim-expanded-01",
+    "hardware": "build/axis-validation/pc-servo-hardware-expanded-01"
+  },
+  "input_registered_sha256": {
+    "sim": "ed931e6c0de4d1a5b4201efd3e07e4496cfcfcad4980b50d138b77719e84ca94",
+    "hardware": "16871986effc2557f15271da57d1c5155813b343a8597130be8d8dddb7c28935"
+  },
+  "gains": {
+    "sim": {
+      "position_kp_q8": 20,
+      "velocity_kp_q8": 128000,
+      "velocity_ki_q8": 5120,
+      "torque_limit_code": 3276,
+      "error_limit_counts": 1024,
+      "velocity_clamp": 8
+    },
+    "hardware": {
+      "position_kp_q8": 26,
+      "velocity_kp_q8": 120000,
+      "velocity_ki_q8": 15488,
+      "torque_limit_code": 3276,
+      "error_limit_counts": 1024,
+      "velocity_clamp": 8
+    }
+  },
+  "validation": {
+    "sim": {
+      "cost": 0.037956881647686694,
+      "mean_absolute_error_counts": 16.904498816101025,
+      "late_error_counts": 0.0,
+      "saturated_fraction": 0.0044725072349381745,
+      "excursion_counts": 899,
+      "motion_adequate": true,
+      "peak_effort_code": 3276,
+      "tail_range_counts": 0
+    },
+    "hardware": {
+      "cost": 0.03607657318797685,
+      "mean_absolute_error_counts": 16.05340699815838,
+      "late_error_counts": 0.082,
+      "saturated_fraction": 0.003946329913180742,
+      "excursion_counts": 900,
+      "motion_adequate": true,
+      "peak_effort_code": 3276,
+      "tail_range_counts": 0
+    }
+  },
+  "search_policy": "expanded-v1",
+  "finalist_repeats": 3,
+  "bound_hits": {
+    "sim": [],
+    "hardware": []
+  },
+  "steps": {
+    "sim": [
+      {
+        "step": 1,
+        "target_counts": 448.0,
+        "delta_counts": 448.0,
+        "overshoot_counts": 1.0,
+        "overshoot_percent": 0.22321428571428573,
+        "rise_10_90_ms": 46,
+        "settling_2_percent_ms": 67,
+        "envelope_1e_decay_ms": null,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.0,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 300,
+        "slot_end_ms": 1200,
+        "late100ms_mean_effort_code": -186.0
+      },
+      {
+        "step": 2,
+        "target_counts": 0.0,
+        "delta_counts": -448.0,
+        "overshoot_counts": 2.0,
+        "overshoot_percent": 0.44642857142857145,
+        "rise_10_90_ms": 43,
+        "settling_2_percent_ms": 63,
+        "envelope_1e_decay_ms": 552,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.0,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 1200,
+        "slot_end_ms": 2100,
+        "late100ms_mean_effort_code": -164.0
+      },
+      {
+        "step": 3,
+        "target_counts": -448.0,
+        "delta_counts": -448.0,
+        "overshoot_counts": 2.0,
+        "overshoot_percent": 0.44642857142857145,
+        "rise_10_90_ms": 43,
+        "settling_2_percent_ms": 62,
+        "envelope_1e_decay_ms": 554,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.0,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 2100,
+        "slot_end_ms": 3000,
+        "late100ms_mean_effort_code": -167.0
+      },
+      {
+        "step": 4,
+        "target_counts": 0.0,
+        "delta_counts": 448.0,
+        "overshoot_counts": 1.0,
+        "overshoot_percent": 0.22321428571428573,
+        "rise_10_90_ms": 47,
+        "settling_2_percent_ms": 68,
+        "envelope_1e_decay_ms": null,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.0,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 3000,
+        "slot_end_ms": 3900,
+        "late100ms_mean_effort_code": -186.0
+      }
+    ],
+    "hardware": [
+      {
+        "step": 1,
+        "target_counts": 448.0,
+        "delta_counts": 448.0,
+        "overshoot_counts": 3.0,
+        "overshoot_percent": 0.6696428571428571,
+        "rise_10_90_ms": 42,
+        "settling_2_percent_ms": 98,
+        "envelope_1e_decay_ms": 58,
+        "overshoot_to_undershoot_ms": 32,
+        "opposite_extremum_ratio": 1.0,
+        "late100ms_error_counts": 0.0,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 300,
+        "slot_end_ms": 1200,
+        "late100ms_mean_effort_code": 826.0
+      },
+      {
+        "step": 2,
+        "target_counts": 0.0,
+        "delta_counts": -448.0,
+        "overshoot_counts": 1.0,
+        "overshoot_percent": 0.22321428571428573,
+        "rise_10_90_ms": 42,
+        "settling_2_percent_ms": 94,
+        "envelope_1e_decay_ms": null,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.01,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 1200,
+        "slot_end_ms": 2100,
+        "late100ms_mean_effort_code": -382.99
+      },
+      {
+        "step": 3,
+        "target_counts": -448.0,
+        "delta_counts": -448.0,
+        "overshoot_counts": 1.0,
+        "overshoot_percent": 0.22321428571428573,
+        "rise_10_90_ms": 42,
+        "settling_2_percent_ms": 98,
+        "envelope_1e_decay_ms": null,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.04,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 2100,
+        "slot_end_ms": 3000,
+        "late100ms_mean_effort_code": -453.6
+      },
+      {
+        "step": 4,
+        "target_counts": 0.0,
+        "delta_counts": 448.0,
+        "overshoot_counts": 1.0,
+        "overshoot_percent": 0.22321428571428573,
+        "rise_10_90_ms": 43,
+        "settling_2_percent_ms": 95,
+        "envelope_1e_decay_ms": null,
+        "overshoot_to_undershoot_ms": null,
+        "opposite_extremum_ratio": null,
+        "late100ms_error_counts": 0.08,
+        "ringing_period_ms": null,
+        "ringing_note": "Not inferred: no robust multi-cycle estimate established.",
+        "slot_start_ms": 3000,
+        "slot_end_ms": 3900,
+        "late100ms_mean_effort_code": 887.97
+      }
+    ]
+  },
+  "limits": [
+    "Expanded bounded search, 25% then 10% refinement; check bound_hits and finalist repetition spread.",
+    "Identical grid selections do not establish gain agreement to a few percent or a unique optimum.",
+    "One fresh validation sequence per backend; repeated training finalists are not validation confidence intervals.",
+    "Feedback can mask plant mismatch; not electrical/current-model validation.",
+    "No robust multi-cycle ringing period established; envelope decay is a direct descriptive measurement."
+  ]
+}

@@ -1,2 +1,8 @@
 /build/
 __pycache__/
+
+# Bulk capture archives are distributed out of band; keep manifests/checksums.
+/datasets/**/*.tar.gz
+
+# Local agent worktrees are not project source.
+/.claude/

@@ -1,30 +1,65 @@
 # simmy
 
+## Same PC tuner, simulated and real motor
+
+![The same PC tuner produces closely tracking simulated and real motor motion](docs/assets/axis/sm232ae-tq10-expanded-tuner-overview.png)
+
+**Develop and test your control software against a model that behaves like your
+machine.** Here, one unchanged PC tuner independently tunes the same production
+controller against a frozen SM232AE/TQ10 model and the real motor. The resulting
+position responses closely track each other—useful feedback before you get to
+the bench, using the same code you'll run there.
+
+[Worked example, fitting context and reproduction commands](docs/axis_controller_development.md).
+
+## Library overview
+
 A small mechatronics simulation library: a serial chain of rigid bodies
 connected by compliant (spring + damper + backlash) couplings, a
 composable "analog signal chain" standing in for a real DAC/amplifier
 signal path, and a bidirectional pulse source for step/dir-style
-position commands. It also includes a current-driven two-phase stepper
-and an averaged voltage-driven induction motor with V/Hz and FOC examples.
-Permanent-magnet models cover balanced healthy operation and explicit
-wye/delta winding circuits with BLDC commutation/device faults and heat
-accounting. Mechanical/analog coefficients load from JSON; motor parameters
-currently use the C API. No opinion on control
-algorithms -- you drive it with a plain function pointer, which may be a
-three-line demo P loop or a real production control cascade linked in
-from somewhere else.
+position commands. It also includes a brushed DC motor, permanent-magnet/BLDC
+models with explicit winding/inverter faults and heat accounting, a
+voltage-driven 3-phase induction motor (open-loop V/Hz plus two FOC variants),
+and a current-driven two-phase stepper. Mechanical/analog coefficients
+and every motor's physical parameters all load from JSON. No opinion on
+control algorithms -- you drive it with a plain function pointer, which
+may be a three-line demo P loop or a real production control cascade
+linked in from somewhere else.
 
-It grew out of a servo-firmware project's native unit tests (started as
-two header-only toy models used to ask "does the control loop track a
-synthetic pulse train / an accelerating one / one with injected
-jitter"), then kept growing (stiction, a localized friction "speed
-bump", periodic torque ripple, a two/three-mass compliant coupling with
-backlash) until it made sense to pull out as its own library.
+Describe your mechanism in JSON, plug in your controller, and run repeatable
+experiments on your laptop or in CI. Start with an example configuration, then
+[fit a model to your recordings](docs/characterization_fitter.md) as you bring it
+closer to your own machine.
 
-**Nothing here is a claim about any specific real machine.** Every
-numeric model is intentionally simplified (see "Scope and non-goals"
-below), and the example configs are representative order-of-magnitude
-ratios for recognizable mechanisms, not measurements.
+## Why simmy
+
+- **Fast enough to iterate on.** Measured on 2012-era Sandy Bridge
+  hardware[^1]: ~200x realtime for basic multi-body mechanical physics
+  (`build/three_mass_leadscrew`), ~1.6x realtime for a full electrical
+  motor simulation (`build/bldc_faults --case wye_healthy`). No GPU, no
+  cluster, and no bench to book.
+- **Reproducible in a way a real motor isn't.** No `rand()` anywhere in
+  the physics; fixed-step runs are deterministic. A simulated motor
+  doesn't drift with ambient temperature, bearing wear, or which bench
+  it happens to be wired to today -- the same JSON config gives the
+  same answer on your laptop and in CI, every time, and you can hand
+  someone the exact motor you tested against instead of a description
+  of one. That's what lets a real test suite run against the simulated
+  plant on every commit, instead of waiting for hardware time.
+- **Validates settling accuracy and autotune behavior without physical
+  hardware.** Real production self-tuning firmware (RLS + gain-glide)
+  can run, converge and be scored against simulated plants it was never
+  shown before -- including plants that deliberately mismatch its
+  internal model.
+- **No opinion on control algorithms.** A three-line demo P loop and a
+  real production control cascade are both ordinary implementations of
+  the same function-pointer typedef.
+- **Four motor families, one mechanical/analog core.** Brushed DC,
+  BLDC/permanent-magnet, 3-phase induction (V/Hz + FOC), and stepper --
+  roughly simplest to most complex.
+- **C compiler + libm only.** No Python, no third-party JSON library for
+  the core library and tests; plotting examples are optional.
 
 ## Build
 
@@ -32,79 +67,11 @@ ratios for recognizable mechanisms, not measurements.
 make lib        # build/libsimmy.a
 make test       # plain assert()-based test suite
 make examples   # self-contained mechanical and motor experiments
-make integration  # OPTIONAL -- only if a ../analog-servo sibling repo exists
+make integration      # OPTIONAL -- only if a ../analog-servo sibling repo exists
+make rls-integration  # OPTIONAL -- only if a ../analog-servo-rls sibling worktree exists
 ```
 
-Only dependencies: a C compiler and libm. No Python, no third-party
-JSON library -- the config parser is hand-rolled (see "JSON config
-files" below).
-
-## Scope and non-goals
-
-- This is a **mechanical + analog-signal-path + simplified motor** simulator.
-  It has no opinion about control algorithms. Servo examples use `SimmyControllerFn`,
-  a plain function pointer -- see "Controller convention" below. A demo
-  P/PD loop and a real production control cascade linked in from
-  elsewhere are both ordinary implementations of that same typedef;
-  there is no special "simple" calling convention and no separate "real"
-  one.
-- Closing the control loop is assumed to happen against **one body** in
-  the chain, `SimmyChainParams.feedbackBody` -- intended to be the body a
-  real motor-mounted encoder would read. Reading position or velocity off
-  any **other** body (e.g. a table at the far end of a lead screw,
-  standing in for where a linear scale would sit) is fully supported for
-  **measurement/evaluation** -- precisely so you can judge whether
-  motor-side-only control tracks acceptably at the load, which is the
-  comparison that matters for judging whether a config fits a real
-  physical setup. Simmy does not support closing the loop against a
-  non-feedback body; that's a deliberate scope boundary.
-- The mechanical body's additive sinusoidal ripple (`rippleAmplitude`/
-  `ripplePeriodCounts`) can stand in for cogging or commutation disturbance;
-  it is not itself an electrical model. The dedicated stepper and BLDC
-  models instead calculate torque from actual phase currents and rotor
-  angle. Use those for microstepping/commutation questions; do not add a
-  second generic ripple that double-counts the same electromagnetic effect.
-  Separate cogging may still be represented as a mechanical disturbance.
-- The stiction model is the textbook "decide before integrating whether
-  the driving force can overcome static friction" formulation -- it
-  avoids the classic bug where a naive post-hoc check makes velocity
-  chatter around zero, but it's not a claim about any particular real
-  friction surface.
-- **Off-axis spring effects are explicitly out of scope** -- e.g. a
-  preload spring or misalignment that would cause a position-dependent
-  NORMAL force and hence a continuously-varying friction profile. This
-  is distinct from `frictionBump*` (a flat localized patch, not a
-  smoothly spring-coupled effect) and is a deliberate exclusion, not a
-  gap to fill later.
-- Not yet modeled (future work): **endstops/hard limits** -- position
-  thresholds that produce a contact event (not just a spring, a
-  one-sided hard stop), for studying home-overshoot at different
-  approach velocities and deceleration/smoothing profiles.
-- The stepper model is **low-speed and current-driven**, not a winding or
-  chopper simulation. Winding inductance, back-EMF, voltage limits,
-  saturation, and non-sinusoidal per-phase torque shapes remain future
-  work. It cannot predict the high-speed torque envelope.
-- Test suite is currently plain `assert()`-based; GUnit (C++ on top of
-  Google Test) was suggested as a possible upgrade for a future cycle --
-  would add a C++ toolchain + Google Test dependency, which cuts against
-  the "C compiler + libm only" promise above, so not adopted yet.
-
-## The mechanical body chain
-
-A chain of 1 to `SIMMY_MAX_BODIES` (8) rigid bodies, each with its own
-inertia, viscous friction, static friction (stiction + Coulomb), gravity
-bias, periodic ripple, and an optional one-off localized friction "speed
-bump" (a dusty/less-greased section, distinct from the recurring
-ripple). Adjacent bodies connect through a `SimmyCouplingParams`:
-spring stiffness, damping, and an optional backlash dead-zone.
-
-A **1-body chain is exactly a rigid coupling** -- no spring math at all,
-which is both physically correct for a truly rigid connection and
-numerically the safest choice (no stiff-spring instability to worry
-about). 2- and 3-body chains sub-step the coupling dynamics internally
-(`SimmyChainParams.subSteps`, default 20) for numerical stability against
-a stiff spring -- a realistic coupling stiffness at a 1kHz-ish tick is a
-stiff ODE for plain Euler integration.
+## Minimal example
 
 ```c
 SimmyChainParams params;
@@ -121,586 +88,27 @@ for (;;) {
 }
 ```
 
-## The analog signal chain
-
-A composable "train of analog type values" standing in for a real
-DAC -> amplifier -> motor signal path: an ordered list of simple stages
-(`gain`, `saturate`, `quantize` -- a DAC's LSB step, `lag` -- one-pole
-electrical bandwidth, `noise`), each transforming a single scalar value.
-Nothing requires using all of these or in any particular order --
-compose whatever path a given drive's own signal chain actually has.
-This is why mechanical bodies have no `ampAlpha`-style field of their
-own: electrical/analog character lives here, separate from mechanical
-properties.
-
-## Two-phase stepper: velocity-ripple milestone
-
-The first stepper model targets disturbances to constant velocity. It
-provides three independently composable parts:
-
-- `SimmyStepperMicrostepAngle(index, M)`: signed step/dir index to
-  electrical command angle, M microsteps per full step. Four full steps
-  make one electrical revolution. The angle is wrapped, not the rotor.
-- `SimmyStepperCurrents(phi, peakCurrent, &path, currents)`: sine/cosine
-  reference currents with independently disableable per-phase DAC
-  quantization, fractional gain errors, and additive offsets. Zeroed
-  `SimmyStepperCurrentParams` is ideal. Quantization precedes gain/offset;
-  there is no implicit current clamp. Two existing analog chains may be
-  added afterward for approximate per-phase dynamics/noise.
-- `SimmyStepperTorque(&motor, theta, Ia, Ib)`: torque in Nm from actual
-  phase currents (A) and mechanical rotor angle (radians):
-
-```
-thetaE = electricalCyclesPerRev * theta + electricalOffset
-torque = Kt * (-Ia*sin(thetaE) + Ib*cos(thetaE))
-         - detentAmplitude * sin(detentCyclesPerRev*theta + detentPhase)
-```
-
-For currents `(I*cos(phi), I*sin(phi))`, the powered term is
-`Kt*I*sin(phi-thetaE)`. Positive displacement from alignment produces a
-restoring torque. A conventional 1.8-degree motor has 50 electrical
-cycles/rev, not 200. `I` is vector peak current, not per-phase RMS;
-datasheet holding-torque/current conventions need checking before fitting
-`Kt`. Detent periodicity is separate and must be specified, not inferred
-from the full-step count. Detent persists with zero actual currents;
-phase-current errors need not.
-
-`SimmyStepperChainStep` applies torque to body 0 and reevaluates it from
-rotor position at **every mechanical substep**, even for a one-body chain.
-Currents are held constant over the outer tick. It uses `subSteps` (zero
-means 20); the original `SimmyChainStep` behavior is unchanged. Do not
-also enable body ripple for the same detent effect.
-
-### Units and numerical resolution
-
-The motor uses SI units; the chain still uses counts/tick. Supply explicit
-`radiansPerCount` and `forcePerNm` conversion factors. For example, with
-`C` counts/radian, tick duration `dt` seconds, and chain force unit Nm
-(`forcePerNm=1`):
-
-```
-position = C * theta            velocity = C * dt * omega
-body.inertia = J / (C * dt^2)   body.friction = B / (C * dt)
-radiansPerCount = 1 / C         body.gravityBias = load torque in Nm
-```
-
-Here `J` is kg m² and `B` is Nm/(rad/s). Couplings likewise need conversion
-if starting from SI parameters. The chain's existing stiction velocity
-threshold is in counts/tick, not rad/s; choose the scale deliberately.
-
-Parameters follow the library's caller-validates convention: positive
-inertia, positive conversion factors, positive electrical cycle count,
-and positive M for the microstep-angle helper. Disabled current
-quantization uses step zero. No automatic timestep selection is provided.
-Resolve both magnetic/mechanical resonance **and command pulse timing**;
-mechanical substeps cannot recover pulse edges hidden inside an outer
-tick. Check convergence when changing tick rate or stiffness.
-
-### Reproduce the plots
-
-```
-make test examples
-build/stepper_velocity > build/stepper_velocity.csv
-python3 examples/plot_stepper.py build/stepper_velocity.csv build/stepper
-```
-
-Only plotting requires Python, NumPy, and Matplotlib. Outputs are
-`build/stepper_velocity.{png,svg}` and `build/stepper_spectrum.{png,svg}`;
-the CSV includes position, velocity, load angle, actual currents, and torque.
-
-The example compares continuous ideal commands, 16/64 microsteps per full
-step, detent only, current errors only, and combined disturbances. It uses
-an illustrative 200-full-step/rev motor, 1 A vector current, Kt=0.4 Nm/A,
-J=4e-4 kg m² including reflected load, B=.008 Nm/(rad/s), .03 Nm load,
-and .2 rad/s (1.91 rpm) target. Detent amplitude is .012 Nm at 200
-cycles/rev. Current errors are +3%/-3% gain, +.01/-.015 A offset, and
-1/31 A DAC increments. There is **no velocity controller** in this example.
-
-Over the 2–4 s measurement window, RMS velocity error relative to target
-is approximately:
-
-| Scenario | RMS error / target |
-|---|---:|
-| Continuous ideal | 0.004% |
-| 16 microsteps | 20.45% |
-| 64 microsteps | 3.04% |
-| Detent only, continuous command | 8.83% |
-| Current errors only, continuous command | 6.08% |
-| Combined, 16 microsteps | 59.17% |
-
-The combined case briefly reverses despite positive average speed; it is
-not a small additive ripple. These numbers describe this lightly damped
-illustrative setup, **not typical motor performance**. Halving the outer
-tick from 100 to 50 microseconds changes combined RMS error from 59.17%
-to 59.15%; the ideal residual also shrinks. Automated tests cover the
-ripple comparisons and convergence, torque identities/sign/periodicity,
-current errors, detent with zero current, signed microstep commands,
-loaded equilibrium, friction breakaway, explicit unit conversion, and
-one-/two-body substep convergence.
-
-Stepper parameters currently use the C API, not JSON configuration.
-Non-sinusoidal phase torque and compensation experiments are next steps;
-the ideal sine-law motor is not a complete microstep-accuracy model.
-
-### Speed sweep and resonance
-
-```
-make examples
-python3 examples/run_stepper_sweep.py velocity --output build/stepper_sweep.csv
-python3 examples/plot_stepper_sweep.py
-```
-
-This runs the same six cases at 121 logarithmically spaced speeds from
-.01 to 1.2 rad/s (.0955 to 11.46 rpm). The optional Python stdlib runner
-executes independent C `--point` trials concurrently, preserving speed
-order in the CSV. These are **offline, fixed-timestep simulations**, not
-real-time tasks: each outer tick advances simulated time by `1/HZ` seconds
-with fixed mechanical substeps. There is no wall-clock pacing, deadline,
-or scheduling-dependent `dt`, and no synchronization barrier between
-trials. CPU contention changes time to completion, not simulated physics.
-Eight workers took about 20 seconds on the development
-machine, versus about two minutes for the C-only serial alternative:
-`build/stepper_velocity --sweep > build/stepper_sweep.csv`.
-Each point is an **independent trial initialized at
-ideal loaded traveling equilibrium**, not an acceleration ramp or a
-pull-in/pull-out test. All use two seconds of settling, followed by at
-least two seconds AND four complete commanded electrical cycles of
-measurement. The window is rounded up to whole electrical cycles to
-reduce endpoint bias. A shared fixture in `examples/stepper_experiment.h`
-keeps the trace, sweep, and sweep regression tests on identical parameters.
-
-The summary CSV includes target/mean speed, RMS error relative to target,
-AC RMS (mean removed), peak-to-peak variation, backward-motion fraction,
-and **unwrapped** maximum/final electrical load angle. RMS error and AC
-RMS are absolute rad/s values; normalize by target for fractional ripple.
-`phase_boundary_crossed` flags excursions beyond +/- pi load angle during
-settling or measurement. This is a phase-well warning, not proof of
-permanent loss of synchronism; the default sweep has none. A rotor can
-reverse briefly within its magnetic potential well without missing a
-step.
-
-`build/stepper_sweep.{png,svg}` plots absolute and normalized RMS error,
-mean-speed error, and backward-motion fraction. Dashed markers compare
-the local small-signal resonance (~35.5 Hz) with excitation fundamentals:
-
-| Excitation | Predicted crossing speed | Observed nearby result |
-|---|---:|---|
-| 64-microstep update rate | .0174 rad/s | ~.274 rad/s RMS error at .01748 rad/s |
-| 16-microstep update rate | .0698 rad/s | ~1.06 rad/s RMS error at .0698 rad/s |
-| Detent, 200 cycles/rev | 1.116 rad/s | ~.896 rad/s RMS error at 1.108 rad/s |
-
-The prediction uses `sqrt(Kt*I*N*cos(loadAngle)/J)/(2*pi)` at the nominal
-.2 rad/s loaded equilibrium, with damping neglected. Nonlinearity and
-higher harmonics can shift peaks or create additional ones: the lower
-speed peaks in the 16-microstep curve are not separate mechanical modes.
-Large normalized error at low speed is not itself proof of resonance;
-use the absolute-error panel too. In this lightly damped setup, some
-runs move backward for nearly half the measurement window while still
-tracking mean speed closely. These are model demonstrations, not motor
-performance specifications.
-
-Custom sweeps and timestep checks:
-
-```
-# MIN MAX POINTS [tick Hz]
-build/stepper_velocity --sweep .01 .15 41 20000 > build/stepper_sweep_fine.csv
-python3 examples/plot_stepper_sweep.py build/stepper_sweep_fine.csv build/stepper_sweep_fine
-# All six cases at one speed, with explicit outer tick rate:
-build/stepper_velocity --point .0698 20000
-```
-
-Regression tests check resonance against detuned points, the RMS/variance
-identity, bounded load angle despite backward motion, original trace
-metrics after refactoring, and peak convergence under halved timestep.
-The strong 16/64-microstep and detent peaks change by less than .01% in
-the targeted 10 kHz vs 20 kHz checks. **Sub-percent high-speed tails are
-not equally converged**: pulse events occur only on outer ticks. For
-example, at 1.108 rad/s the 64-microstep RMS error falls from .183% to
-.068% when doubling tick rate. Do not interpret those small tails or
-fine jagged features as calibrated physical effects. Resolving pulse
-events inside a tick is a future numerical improvement; mechanical
-substeps alone do not fix pulse-time quantization.
-
-### Compensation experiment and blog notes
-
-`examples/stepper_compensation.c` compares no correction, exact
-position-indexed detent feedforward, motor-side active damping, and both.
-Corrections modify phase-current references **before** the same DAC and
-current-path errors; they are not injected mechanical forces. The fixture
-uses ideal rotor feedback, a +/- .2 Nm correction limit, and +/- 1.5 A
-actual phase-current limits. No command smoothing is included.
-
-```
-make examples
-python3 examples/run_stepper_sweep.py compensation --output build/stepper_compensation_sweep.csv
-build/stepper_compensation --trace detent 1.107971 > build/stepper_compensation_detent_trace.csv
-build/stepper_compensation --trace microsteps .0698 > build/stepper_compensation_microsteps_trace.csv
-build/stepper_compensation --trace combined .2 > build/stepper_compensation_combined_trace.csv
-python3 examples/plot_stepper_compensation.py build docs/plots
-```
-
-The 61-speed, three-scenario, four-policy sweep takes about 22 seconds
-with eight workers on the development host, versus 142 seconds serially;
-the default below completed it in 19.3 seconds with identical output.
-The runner uses only the Python standard library, defaults to 256 workers
-(capped only by the number of trials, not CPU count), and supports `--jobs`, `--points`,
-`--min-speed`, `--max-speed`, and `--hz`. `--output` replaces a file
-atomically only after all trials succeed. Parallel results were byte-for-byte
-identical to both archived serial sweeps. Optional tooling tests run with
-`make test-tools`; `make test` remains C-only.
-
-The C-only serial alternative is `build/stepper_compensation --sweep`.
-`--point SPEED [HZ]` runs all scenarios and policies at one speed;
-`--sweep [HZ]` sets the outer update rate.
-
-See **[blog working notes](docs/stepper-blog-notes.md)** for equations,
-results, caveats, captions, and complete reproduction commands. Selected
-baseline and compensation figures are retained as PNG/SVG in `docs/plots/`,
-with summary data in `docs/data/`; unlike `build/`, these survive cleanup.
-
-The experiment illustrates why a detent table does not fix microstep
-resonance, and why even a tenfold RMS improvement can leave backward
-motion. It also explicitly separates commanded magnetic-field angle from
-mechanical rotor angle: the model never assigns rotor position from the
-command. Ideal collocated feedback and exact detent knowledge remain
-best-case assumptions, not claims about production control performance.
-
-### Abrupt-start and energized-stop slip regressions
-
-`tests/test_stepper_moves.c` tests actual loss of synchronism at both ends
-of a move, in both directions, with the ideal-current motor. It includes:
-
-- A finite 128-microstep move started from rest at .2 rad/s, then held:
-  rings and settles at the intended unwrapped position.
-- A finite 1024-microstep move started abruptly at 20 rad/s: loses
-  synchronism while pulses are running, then relocks 16 electrical cycles
-  behind the command (64 full steps).
-- An isolated stop from synchronized .2 rad/s motion: overshoots, reverses,
-  and settles at the correct alignment.
-- An isolated stop from synchronized 20 rad/s motion: coasts through
-  multiple magnetic wells and settles 5 electrical cycles ahead of the
-  frozen command (20 full steps).
-
-Stopping **holds the final phase currents energized**; it neither snaps
-rotor velocity to zero nor disables the driver. Isolated stopping trials
-start on the ideal traveling solution so they cannot inherit startup
-errors. Each case checks unwrapped error and settled velocity, not only
-wrapped electrical alignment. Repeating the fast cases at 20 kHz instead
-of 10 kHz preserves the slipped-well counts. These deliberately severe
-20 rad/s cases demonstrate the model's dynamics, **not a calibrated
-high-speed pull-in/pull-out limit**. Load, detent, and current errors are
-disabled to isolate the effect.
-
-```
-make test
-build/test_stepper_moves --csv build/stepper_moves.csv
-python3 examples/plot_stepper_moves.py build/stepper_moves.csv docs/plots/stepper_start_stop_slip
-```
-
-The plot is retained in `docs/plots/stepper_start_stop_slip.{png,svg}`.
-The prior steady-speed sweeps still initialize at traveling equilibrium;
-they should not be interpreted as startup/stop tests.
-
-## Induction motor + open-loop V/Hz drive
-
-The averaged induction machine uses four stator/rotor flux states in
-stationary alpha/beta coordinates, with explicit resistance, leakage and
-magnetizing inductance, pole pairs, induced currents, torque and stored
-magnetic energy. It is **voltage-driven**, not a prescribed torque curve.
-An independent open-loop V/Hz drive supplies balanced sinusoidal voltages,
-with frequency ramp, optional voltage boost and voltage ceiling.
-
-```
-make test examples
-build/induction_vfd > build/induction_vfd.csv
-python3 examples/plot_induction_vfd.py build/induction_vfd.csv docs/plots
-# Halve plant timestep without changing the fixed 1 kHz command clock:
-build/induction_vfd --steps 80 > build/induction_vfd_fine.csv
-```
-
-Plots are retained as PNG/SVG in `docs/plots/induction_vfd_{load,startup,low_speed}`.
-See **[induction/VFD notes and FOC roadmap](docs/induction-vfd-notes.md)**
-for equations, conventions, test coverage, parameters, results and caveats.
-
-At 50 Hz with two pole pairs, the illustrative example settles at 1498.43
-rpm unloaded and 1429.52 rpm with a 6 Nm brake, versus a 1500 rpm rotating
-field. A 20 Nm passive brake stalls it; reducing to 6 Nm permits restart.
-Unlike stepper loss of synchronism, **nonzero slip is normal under load**.
-The low-speed experiment shows voltage boost restoring torque margin,
-but also increased flux; the unsaturated model cannot prescribe safe
-boost settings.
-
-Motor quantities are SI. `SimmyMotorMount` maps to the chain's original
-counts/tick units. `SimmyChainStepDt` advances mechanics by an explicit
-fraction of the original tick without rescaling state/parameters; the
-existing one-tick APIs retain their behavior. The new example independently
-schedules drive updates at 1 kHz and plant integration at 40 kHz. Electrical
-RK4 plus partitioned mechanical integration is not a fully coupled
-fourth-order solver; convergence must be checked with the command clock fixed.
-
-The induction plant is separate from the drive so future rotor-flux-oriented
-control can replace V/Hz with a current controller while retaining the same
-motor. Both the **ideal true-flux FOC benchmark** and **encoder-assisted
-indirect FOC** below are implemented; a separate firmware observer and
-sensorless estimation remain future work. Rotor mechanical angle is not
-rotor-flux angle.
-
-No PWM switching, saturation, core losses, current-limit/trip protection,
-DC-bus dynamics or thermal model is included. Currents in the plots are
-instantaneous alpha/beta vector magnitudes, not transient phase RMS.
-Numerical library/tests/examples remain C + libm only; plotting is optional.
-
-## Ideal induction FOC benchmark
-
-`examples/induction_foc.h` is an example rotor-flux-oriented controller on
-the same induction plant, not a new motor model. It uses **true simulated
-rotor flux**, actual stator current and shaft speed: this is an ideal
-benchmark, not sensorless control. The 1 kHz speed loop supplies q-current
-demand, the 10 kHz current PI loops supply voltage, and the plant integrates
-at 40 kHz. Flux establishes before torque-current demand is released.
-
-```
-make test examples
-build/induction_foc > build/induction_foc.csv
-python3 examples/plot_induction_foc.py build/induction_foc.csv docs/plots
-# Refine only the plant timestep, not either control loop:
-build/induction_foc --steps 8 > build/induction_foc_fine.csv
-```
-
-The comparison uses a 150 rad/s request and passive brake steps. Under
-6 Nm, FOC briefly dips to 146.135 rad/s then returns to 150; V/Hz settles
-near 142.578 rad/s. A 20 Nm overload stalls both; both recover when it is
-reduced. FOC maintains its requested flux and limits vector-current demand
-to 8 A; V/Hz has no current protection, so this is **not an equal-current
-comparison**. Both drives share a 187.794 V voltage-vector ceiling.
-
-A separate unattainable 350 rad/s request exercises voltage saturation
-and anti-windup, then recovery to 100 rad/s. Actual current briefly reaches
-~11.93 A despite the 8 A request limit: **reference limiting is not hardware
-overcurrent protection**. Electrical state is never clipped to a requested
-current or speed. No field weakening or DC-bus/regeneration protection is
-implemented.
-
-See **[FOC notes, plots and limitations](docs/induction-foc-notes.md)**.
-Retained figures are `docs/plots/induction_foc_{comparison,load_rejection,voltage_limit}.{png,svg}`;
-summary data is `docs/data/induction_foc_summary.csv`. The indirect controller
-below now removes true-flux access; a firmware flux observer remains future work.
-
-## Indirect induction FOC and hidden-flux evaluation
-
-`examples/induction_ifoc.h` replaces true rotor-flux feedback with an
-encoder-assisted scalar flux model and slip-angle integration. The indirect
-controller receives **only stator-current and shaft-speed measurements**,
-plus explicit nominal parameters. Startup gating, torque conversion and
-current control all use estimated flux, never the hidden plant flux.
-Measurements remain ideal in this milestone; this is not sensorless control.
-
-```
-make test examples
-build/induction_ifoc > build/induction_ifoc.csv
-python3 examples/plot_induction_ifoc.py build/induction_ifoc.csv docs/plots
-```
-
-The plant's rotor resistance stays fixed while controller assumptions are
-matched, half or 1.5 times nominal. Matching parameters track the ideal
-oracle closely. With 1.5 times assumed rotor resistance, speed still tracks
-150 rad/s under 6 Nm while estimated flux is .5 Wb turns and actual flux is
-only .352: **correct speed does not prove correct flux estimation**. The
-half-resistance case overfluxes and becomes voltage-limited.
-
-See **[indirect FOC notes and comparison plots](docs/induction-ifoc-notes.md)**.
-Figures are retained as `docs/plots/induction_ifoc_{estimation,loaded_state}.{png,svg}`.
-True simulated flux is a scoring oracle within the chosen model, not a
-real-world measurement. If firmware later uses a flux observer, compare
-both estimates on the same measurement stream against hidden simulated
-truth; agreement between two estimators alone does not establish accuracy.
-No new firmware observer is implemented here.
-
-## BLDC / permanent-magnet models, faults and heat
-
-The public API in `include/simmy_bldc.h` (also included by `simmy.h`) offers:
-
-- **Reduced balanced PM model:** two alpha/beta current states, voltage-driven
-  current dynamics, torque, magnetic energy and copper heat. Exact reductions
-  are tested for sine/trapezoidal floating-wye windings and terminal-equivalent
-  sine delta without circulation.
-- **Explicit winding/inverter model:** three winding branches, floating-neutral
-  wye or closed delta, per-winding R/L/Ke, sinusoidal/trapezoidal back-EMF, and
-  three legs with FET resistance, open channels and body-diode freewheeling.
-  Delta retains internal circulating current, not just terminal currents.
-
-The examples compare healthy operation, mistimed/wrong-sector commutation,
-weak high-resistance windings, degraded/open high FETs and static open windings
-in both connections. Controllers remain separate; neither actual speed nor
-current is assigned/clipped to the demand. A fixed-rate PI/six-step/PWM example
-uses the existing mechanics and independent solver/control clocks.
-
-```
-make test examples test-tools
-build/bldc_equivalence > build/bldc_equivalence.csv
-build/bldc_circulation > build/bldc_circulation.csv
-python3 examples/run_bldc_sweep.py --output build/bldc_faults.csv
-python3 examples/run_bldc_sweep.py --steps 8 --output build/bldc_faults_fine.csv
-python3 examples/plot_bldc.py build/bldc_faults.csv docs/plots \
-    --fine build/bldc_faults_fine.csv \
-    --equivalence build/bldc_equivalence.csv \
-    --circulation build/bldc_circulation.csv
-```
-
-The stdlib-only runner defaults to **256 workers, limited by trial count**;
-`--jobs` overrides, `--case` selects subsets. Ordered output is byte-identical
-to serial execution and replaced atomically only on success. `--steps` refines
-only the plant grid, not the fixed PWM/commutation/speed clocks.
-
-**Heat added is tracked in joules per winding, transistor and diode.**
-Numerical integration damping is accounted for separately, never called
-physical heat. The example score normalizes heat per delivered brake work
-against healthy operation, but refuses to score failed tracking or mismatched
-work. Correct speed can hide a heat regression: a +60-electrical-degree wrong
-sector still tracks speed here while costing about 7.47x healthy heat/work in
-wye and 4.74x in delta.
-
-For CI-style comparison with a retained historical baseline (no plotting deps):
-
-```
-python3 examples/bldc_metrics.py build/bldc_faults_summary.csv \
-    docs/data/bldc_faults_summary.csv --case wye_healthy --case delta_healthy
-# Exit 0: pass; 1: heat/task regression; 2: invalid comparison/input.
-```
-
-See **[BLDC fault/model notes, equations, validation and plots](docs/bldc-fault-notes.md)**.
-Six PNG/SVG figures are retained as `docs/plots/bldc_*`; compact summary,
-convergence and illustrative benchmark data are in `docs/data/bldc_*.csv`.
-The independent coupled equivalence example agrees within ~1e-12 A; the reduced
-model was roughly 4x cheaper in a local electrical-step benchmark.
-
-These are linear-magnetic equation-level models, not identified motors or
-hardware fault diagnosis. Mutual inductance, saturation, thermal dynamics,
-core/switching losses, current trips, shorted-turn circuits and shoot-through/
-DC-link dynamics are not included. Heat is not temperature. A healthy harmonic
-delta is outside the two-state equivalence: it can heat internally even with
-zero terminal current. Static winding opens are supported; opening an energized
-winding is rejected rather than erasing stored energy.
-
-## Controller convention
-
-For the position/axis simulation harness, the controller callback is:
-
-```c
-typedef int32_t (*SimmyControllerFn)(void *userData, int32_t targetPosition,
-                                      int32_t actualPosition, int32_t actualVelocity,
-                                      uint32_t dtCycles);
-```
-
-Motor experiments separately schedule voltage/gate controllers at explicit
-sample rates; they need not squeeze vector electrical commands through this
-scalar position/force callback. Both styles keep controllers outside plant
-physics.
-
-The signature is chosen to match a typical fixed-point position-control
-tick function closely enough that wrapping a real controller is a direct
-passthrough, not an adapter fighting the API -- see
-`examples/analog_servo_integration/main.c`, where the entire adapter for
-a real production control cascade is:
-
-```c
-static int32_t ControlAdapter(void *userData, int32_t targetPosition, int32_t actualPosition,
-                               int32_t actualVelocity, uint32_t dtCycles) {
-  (void)userData;
-  return ControlTick(targetPosition, actualPosition, actualVelocity, dtCycles);
-}
-```
-
-The plain examples' own demo PD controller is just another ordinary
-implementation of the same typedef -- no fallback/shortcut version.
-
-## Bidirectional pulse source
-
-`SimmyPulseTrainState`/`SimmyPulseTrainTickDelta` model the quantized
-edge-count result a real step/dir (or quadrature) pulse train would
-produce each tick for an idealized periodic source. The rate may be
-**negative** -- a reversing move -- which is the only way to actually
-exercise a coupling's backlash dead-zone (see `examples/bidirectional_move.c`):
-a one-way move never crosses it. Jitter is clamped so it can never flip
-the sign of a tick's increment -- it models short-term timing noise, not
-a free direction reversal.
-
-## JSON config files
-
-Hand-rolled parser (`src/simmy_json.c`), scoped to exactly this shape --
-not a general-purpose, hardened JSON parser.
-
-```jsonc
-{
-  "bodies": [
-    {"inertia": 64, "friction": 0.02, "stictionLimit": 0, "coulombLevel": 0,
-     "gravityBias": 0, "rippleAmplitude": 60, "ripplePeriodCounts": 20,
-     "frictionBumpCenter": 0, "frictionBumpHalfWidth": 0, "frictionBumpExtra": 0},
-    {"inertia": 8, "friction": 0.01, "stictionLimit": 80, "coulombLevel": 50}
-  ],
-  "couplings": [
-    {"springK": 3.16, "springD": 1.0, "backlashGap": 0.5}
-  ],
-  "feedbackBody": 0,
-  "subSteps": 20,
-  "analogChain": [
-    {"type": "lag", "param0": 0.6}
-  ]
-}
-```
-
-`bodies` must be non-empty; `inertia` is required (no sane default --
-there's no "how heavy is this body" default). Everything else defaults
-to 0/disabled if omitted. `couplings` needs exactly `bodies.length - 1`
-entries (extra ones are ignored, missing ones default to a no-op
-coupling). `analogChain` stage `type` is one of
-`gain`/`saturate`/`quantize`/`lag`/`noise`, using `param0`/`param1` per
-stage (see `include/simmy.h`'s enum comments for what each means).
-
-`SimmyChainParamsFromJsonFile` and `SimmyAnalogChainParamsFromJsonFile`
-each read their own top-level section from the SAME file -- one JSON
-file describes a complete scenario.
-
-## Examples
-
-- **`examples/basic_two_mass.c`** -- a JSON-driven two-body chain
-  (`examples/configs/two_mass.json`), demo PD controller, CSV to stdout.
-- **`examples/three_mass_leadscrew.c`** -- a three-body chain (motor ->
-  belt -> lead screw -> nut [with backlash] -> table,
-  `examples/configs/three_mass_leadscrew.json`). Also demonstrates
-  reading a body other than the feedback one purely for measurement:
-  prints the table's position alongside the motor's, so you can see the
-  gap between "what motor-side control achieves" and "what actually
-  happens at the load."
-- **`examples/bidirectional_move.c`** -- a reversing move through the
-  same three-body chain (its own config, `examples/configs/
-  bidirectional_move.json`, with a larger nut backlash gap so the
-  dead-zone crossing at reversal is clearly visible, not just 1-2
-  ticks). Prints the nut's relative displacement and whether it's
-  currently inside the backlash dead zone each tick, computed from the
-  same public fields the library itself uses -- no special
-  introspection API needed.
-- **`examples/analog_servo_integration/`** -- optional, only builds if a
-  `../analog-servo` sibling repo is present. Links the REAL
-  `firmware/src/Control.c` from that repo and replays the exact scenario
-  its own native test suite already calibrated, confirming the two
-  reproduce matching numbers. This is the concrete proof that simmy
-  composes with a real external control loop, not just its own demo
-  controller.
-
-## Single-axis identification prototype
-
-See [the characterization notes](docs/axis_identification.md) for a minimal
-sensor setup, excitation/validation moves, and the boundaries of a useful model.
-`examples/identify_axis.py` generates offline motion plans, delegates acquisition
-to an explicit hardware adapter, and fits a rigid baseline or a two-body
-compliance/backlash model from measured effort and position. The two-body fit
-uses motor and load sensors, profiles the backlash gap, and validates held-out
-motor/load trajectories. Synthetic demos and Python tests exercise the workflow;
-`examples/plot_axis_identification.py` plots the two-body results. NumPy is required,
-with optional SciPy for two-body fitting and Matplotlib for plots. These tools add
-no C-library dependencies and are not realtime controllers.
+## Full documentation
+
+Built for Read the Docs; see `docs/` (`mkdocs serve` to browse locally):
+
+- Sample parameters and measured results for the
+  [brushed DC](docs/motors/dc.md), [BLDC](docs/motors/bldc.md),
+  [3-phase induction](docs/motors/induction.md), and
+  [stepper](docs/motors/stepper.md) motor models.
+- The [loop frequencies](docs/loop-frequencies.md) every example fixes
+  (mechanical tick, drive/current/PWM/commutation clocks, plant
+  integration rate).
+- The [mechanical chain](docs/mechanical-chain.md),
+  [analog signal chain](docs/analog-chain.md), and
+  [JSON config format](docs/build.md#json-config-files).
+- [Driving simmy with your own controller](docs/integration.md) and the
+  [scope and non-goals](docs/scope.md) that bound every model here.
+- Every [example](docs/examples.md) and its reproduction commands,
+  including the hardware-free settling-accuracy/autotune validation.
 
 ## License
 
 MIT, see `LICENSE`.
+
+[^1]: Intel(R) Xeon(R) CPU E5-1650 0 @ 3.20GHz.

@@ -1,0 +1,150 @@
+{
+  "schema": "axis-bench-capture-archives-v1",
+  "omitted": [
+    "native .so binaries (rebuildable)",
+    "__pycache__"
+  ],
+  "total_compressed_bytes": 12625748,
+  "total_unpacked_bytes": 139291955,
+  "public_download_url": null,
+  "local_archive_directory": "/home/claude/simmy-artifacts/axis/pc-servo-expanded-01",
+  "manifest_sha256": "fa92e540c08ef3b3df5da1d4d597a6f0c32aceabe0158efe2115d5c39ec21c82",
+  "archives": [
+    {
+      "archive": "assets.tar.gz",
+      "bytes": 511227,
+      "sha256": "90bc5626e7a577c0c5247dfb18fbf5d1b233929d9f803e23814b2eaaea3ed36f",
+      "unpacked_bytes": 558766,
+      "file_count": 3
+    },
+    {
+      "archive": "axis-v2-designed-validation.tar.gz",
+      "bytes": 1129971,
+      "sha256": "650d8aa182213d83910036fe083a507953c50a44e5c8b2e32fef01269070cbad",
+      "unpacked_bytes": 6845649,
+      "file_count": 24
+    },
+    {
+      "archive": "axis-v2-random-validation-23210.tar.gz",
+      "bytes": 1126624,
+      "sha256": "7b1ed7bcc7be54f57ac1757153a94351bbcbb1907ab347cab9eb03b82eb65812",
+      "unpacked_bytes": 6869468,
+      "file_count": 24
+    },
+    {
+      "archive": "axis-v2-random-validation-23211.tar.gz",
+      "bytes": 1155267,
+      "sha256": "803994f020f755bc548e4698cd3b29ff6b4133cbe292a987ade2e90cedb1fb16",
+      "unpacked_bytes": 6818204,
+      "file_count": 24
+    },
+    {
+      "archive": "axis-v2-random-validation-23212.tar.gz",
+      "bytes": 1085096,
+      "sha256": "b9bfa7d54f09d6cc634b9a8795bee9f5e54e9bb63a00289500971397c66a40e3",
+      "unpacked_bytes": 6863596,
+      "file_count": 24
+    },
+    {
+      "archive": "build.tar.gz",
+      "bytes": 329,
+      "sha256": "437b5cbb105559b1d49ff517418c07908b2e3dd7a5a77e79543f15058768440f",
+      "unpacked_bytes": 282,
+      "file_count": 1
+    },
+    {
+      "archive": "characterization_rig.tar.gz",
+      "bytes": 8421,
+      "sha256": "9b6878399383a920049518b4f3fbccc05963ba1a032aa74ba24f870ac63783bc",
+      "unpacked_bytes": 23140,
+      "file_count": 10
+    },
+    {
+      "archive": "controller-workload-fit-01.tar.gz",
+      "bytes": 13512,
+      "sha256": "fcef9621c58c4f6b5e11c557d1c37d56cd6d03623a48479cb8a35141f2006424",
+      "unpacked_bytes": 53841,
+      "file_count": 8
+    },
+    {
+      "archive": "controller-workload-older-backtests-02.tar.gz",
+      "bytes": 289754,
+      "sha256": "3b4ac6d4817a6f67456058bbbe5561d70be20893e3f014a7f45599882d717ff9",
+      "unpacked_bytes": 310966,
+      "file_count": 9
+    },
+    {
+      "archive": "drive-fault-offline-audit-02.tar.gz",
+      "bytes": 1901,
+      "sha256": "0c3997353ead2149b79a924bed7e8319ee02a23225d1c5e8be67b8bc7a79e9ed",
+      "unpacked_bytes": 13636,
+      "file_count": 2
+    },
+    {
+      "archive": "examples.tar.gz",
+      "bytes": 32118,
+      "sha256": "6db0b8bc74da1fc5db75c696e5f46323e0f2e429578c6aea6dd5c7e44ccd37de",
+      "unpacked_bytes": 102262,
+      "file_count": 16
+    },
+    {
+      "archive": "models.tar.gz",
+      "bytes": 1116,
+      "sha256": "808c50fc914bde5a1cf52ebe561eb31f268b5bceff89c6c36912faabfb27dcdf",
+      "unpacked_bytes": 3530,
+      "file_count": 1
+    },
+    {
+      "archive": "pc-servo-expanded-comparison-02.tar.gz",
+      "bytes": 324668,
+      "sha256": "4d51932607024c7978a46fddfa19fa5ec8a8c8f9cea8abea03f05305206fb58d",
+      "unpacked_bytes": 501671,
+      "file_count": 5
+    },
+    {
+      "archive": "pc-servo-hardware-expanded-01.tar.gz",
+      "bytes": 1839033,
+      "sha256": "6e011e4fbf377f787b03422dba2e8d2ab900a6318846e3b995f9373c529e363b",
+      "unpacked_bytes": 19979090,
+      "file_count": 597
+    },
+    {
+      "archive": "pc-servo-hardware-search-01.tar.gz",
+      "bytes": 583621,
+      "sha256": "2f25e48ccd82f93293f6eeb268e65f8bf953410abef381b5e90d193903dba45e",
+      "unpacked_bytes": 5643666,
+      "file_count": 186
+    },
+    {
+      "archive": "pc-servo-sim-expanded-01.tar.gz",
+      "bytes": 2373560,
+      "sha256": "3d81825fc80981155715223816e7ac09ddfcb0651dd56c735b6bec1e22da394b",
+      "unpacked_bytes": 44723897,
+      "file_count": 191
+    },
+    {
+      "archive": "pc-servo-workload-candidate-sim-01.tar.gz",
+      "bytes": 2140147,
+      "sha256": "b04ba210563097710fcd2a0fb01dddbadb969e583a65abfadd3b01c140c8a909",
+      "unpacked_bytes": 39957922,
+      "file_count": 174
+    },
+    {
+      "archive": "session-metadata.tar.gz",
+      "bytes": 9383,
+      "sha256": "275872607922f468bf24259059732bb24e4776cc9979505403c0ee720fb74203",
+      "unpacked_bytes": 22369,
+      "file_count": 4
+    }
+  ],
+  "verified_all_archive_and_file_hashes": true,
+  "external_drive_fault_reported_after_run": true,
+  "external_drive_alarm_recorded": false,
+  "fault_trip_time_and_cause_known": false,
+  "operator_later_reported_recovery": true,
+  "verified_failed_fit_coefficients_and_solver_results_identical": true,
+  "verified_entire_53_trial_sim_search_history_identical": true,
+  "verified_replot_both_png_byte_identical": true,
+  "verified_comparison_json_except_input_paths": true,
+  "reproduction_directory": "/tmp/simmy-expanded-reproduction-01"
+}

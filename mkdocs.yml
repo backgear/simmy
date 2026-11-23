@@ -1,0 +1,79 @@
+site_name: simmy
+site_description: A small mechatronics simulation library -- mechanical chains, an analog signal chain, and brushed DC/BLDC/induction/stepper motor models.
+repo_url: https://github.com/backgear/simmy
+docs_dir: docs
+
+# Local run reports are not part of the maintained documentation site.
+exclude_docs: |
+  axis_*.md
+  !axis_controller_development.md
+  !axis_recorded_motion.md
+  !axis_device_protocol.md
+  !axis_identification.md
+  !axis_recorder.md
+  axis_*.json
+  identification_archive.md
+  assets/axis/*
+  !assets/axis/sm232ae-tq10-expanded-tuner-overview.png
+  assets/identification/refinement-tradeoffs.png
+  assets/identification/simulation-harness-audit.png
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - admonition
+  - footnotes
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Build: build.md
+  - Motors:
+      - Brushed DC: motors/dc.md
+      - BLDC / permanent-magnet: motors/bldc.md
+      - Induction (3-phase): motors/induction.md
+      - Stepper: motors/stepper.md
+  - Mechanical chain: mechanical-chain.md
+  - Couplings:
+      - Overview: couplings/index.md
+      - Shaft couplings: couplings/shaft-couplings.md
+      - Gears: couplings/gears.md
+      - Belts: couplings/belts.md
+      - Clutches: couplings/clutches.md
+  - Hardware identification:
+      - Overview: hardware_identification.md
+      - Fit your machine:
+          - Quick chain fit: characterization_fitter.md
+          - Recordings and fit configuration: identification_recordings.md
+      - "Measured example: SM232AE / TQ10":
+          - Controller development in simulation: axis_controller_development.md
+          - Predicting recorded motion: axis_recorded_motion.md
+      - Reference and evidence:
+          - Recorder: axis_recorder.md
+          - Device protocol: axis_device_protocol.md
+          - Acquisition walkthrough: axis_identification.md
+          - Reproducing the results: identification_reproduction.md
+  - Analog signal chain: analog-chain.md
+  - Loop frequencies: loop-frequencies.md
+  - Driving simmy with your own controller: integration.md
+  - Scope and non-goals: scope.md
+  - Examples: examples.md
