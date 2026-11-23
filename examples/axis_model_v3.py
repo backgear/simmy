@@ -137,7 +137,8 @@ def main():
     old = []; target = []; train = []; dev = []; inventory = {}; splits = {}
     target_gaps = []; training_gaps = []
     def carry_coordinates(cases, episodes):
-        gaps=[]; converted=[]; origin=None; end=None
+        from axis_v3_chain import phase_gap
+        gaps=[]; converted=[]; origin=None; end=None;last_count=None
         for case,episode in zip(cases,episodes):
             count=np.fromfile(case/'stream-0.i64le',dtype='<i8')
             run=json.loads((case/'get_run.json').read_text())
@@ -146,10 +147,9 @@ def main():
             if descriptor['period_ticks']!=500 or u[0]!=0 or u[-1]!=0:
                 raise ValueError('state carry requires aligned 2kHz data and zero-output pre/postroll')
             if origin is None:origin=int(count[0])
-            gap=None if end is None else tick-end
-            if gap is not None and gap<0:raise ValueError('overlapping captures/clock reset within cohort')
+            gap=phase_gap(end,last_count,tick,int(count[0]))
             converted.append((u,(count-origin)*Q,episode[2]));gaps.append(gap)
-            end=tick+(len(count)-1)*500
+            end=tick+(len(count)-1)*500;last_count=int(count[-1])
         return converted,gaps
     def effort_episode(case):
         _, u, x, dt, _, _ = load_effort(case)

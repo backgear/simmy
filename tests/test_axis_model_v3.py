@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT/'examples'))
 from axis_fit_controller_workload import Batch, NAMES
 from axis_model_v3 import legacy, EXTRA
 from axis_v3_compare import native_parameters
-from axis_v3_chain import Stateful, initial_state
+from axis_v3_chain import Stateful, initial_state, phase_gap
 from axis_v3_ramp_preview import ramp_reference
 
 
@@ -136,6 +136,12 @@ class LegacyInputTests(unittest.TestCase):
 
 
 class ToolInterfaceTests(unittest.TestCase):
+    def test_state_carry_rejects_unverified_clock_and_encoder_bridges(self):
+        self.assertIsNone(phase_gap(None,None,1000,0))
+        self.assertEqual(phase_gap(1000,10,1625,11),625)
+        for tick,count in [(1000,10),(999,10),(1625,12)]:
+            with self.assertRaises(ValueError):phase_gap(1000,10,tick,count)
+
     def test_ramp_proposal_is_finite_slow_and_returns_to_origin(self):
         for distance in (1,64,128):
             positive=ramp_reference(distance)

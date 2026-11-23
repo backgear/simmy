@@ -61,6 +61,14 @@ class Stateful:
 def initial_state(): return np.array([0.,0.,0.,0.,1.,0.])
 
 
+def phase_gap(previous_tick,previous_count,tick,count):
+    """Reject a clock/frame break before inventing a zero-input bridge."""
+    if previous_tick is None:return None
+    if tick<=previous_tick:raise ValueError('clock reset/overlapping captures inside suite')
+    if abs(int(count)-int(previous_count))>1:raise ValueError('unverified encoder continuity at quiet boundary')
+    return tick-previous_tick
+
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--fits',nargs='+',type=Path,required=True)
@@ -94,7 +102,7 @@ def main():
         suites.append((root,[root/p['name'] for p in reg['plans']],False,set()))
     metrics=[];inventory={};boundaries=[]
     for root,cases,servo,dev in suites:
-        states={k:initial_state() for k in models};first_count=None;first_tick=None;last_tick=None
+        states={k:initial_state() for k in models};first_count=None;first_tick=None;last_tick=None;last_count=None
         for case in cases:
             run=json.loads((case/'get_run.json').read_text())
             if run.get('fault_reason') is not None or not run['capture_complete']:raise ValueError('invalid run')
@@ -109,9 +117,8 @@ def main():
             tick=desc['first_sample_tick'];end=tick+(len(count)-1)*500
             if first_count is None:first_count=int(count[0]);first_tick=tick
             x=(count-first_count)*Q
-            gap=0 if last_tick is None else tick-last_tick
-            if gap<0:raise ValueError('clock reset/overlapping captures inside suite')
-            boundaries.append(dict(suite=str(root),source=str(case),gap_ticks=gap,
+            gap=phase_gap(last_tick,last_count,tick,int(count[0]))
+            boundaries.append(dict(suite=str(root),source=str(case),gap_ticks=0 if gap is None else gap,
                 first_count=int(count[0]),first_tick=tick,first_state_assumed=last_tick is None))
             predictions={}
             for name,(family,p) in models.items():
@@ -130,7 +137,7 @@ def main():
                 figure(out/(root.name+'-state-carry.png'),t,x,ref,u,predictions,windows,
                     root.name+' — state carried from first run; coordinates relative to suite origin',origin='suite')
                 np.savez_compressed(out/(root.name+'-state-carry.npz'),t=t,real=x,reference=ref,effort=u,**predictions)
-            inventory[str(case)]=inv;last_tick=end
+            inventory[str(case)]=inv;last_tick=end;last_count=int(count[-1])
     csv_write(out/'captures.csv',metrics);csv_write(out/'boundaries.csv',boundaries)
     save(out/'inventory.json',dict(models=models_meta,inputs=inventory,
         sources={p.name:sha(p) for p in sorted(source.iterdir())},adapter_sha256=sha(Path(__file__)),
