@@ -365,7 +365,7 @@ static void handle_HELLO(uint32_t seq) {
 
     jw_kv_u64(&w, "analog_channels", NUM_ANALOG_CHANNELS);
     jw_kv_u64(&w, "analog_raw_bits", 12);
-    jw_kv_bool(&w, "analog_simultaneous", false);
+    jw_kv_bool(&w, "analog_simultaneous", true); /* ADC1+ADC2 regular-simultaneous dual mode, see axis_hw.cpp */
     jw_kv_u64(&w, "analog_min_period_ticks", ANALOG_MIN_PERIOD_TICKS);
 
     jw_key(&w, "memory");
