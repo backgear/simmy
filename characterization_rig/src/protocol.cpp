@@ -6,10 +6,12 @@
 #include "protocol.h"
 #include "axis_config.h"
 #include "axis_hw.h"
+#include "source_id.h"
 #include "run_buffer.h"
 #include "crc32.h"
 #include "sha256.h"
 #include "json_writer.h"
+#include "stream_write.h"
 
 /* ===========================================================================
  * Framing + JSON dispatch for docs/axis_device_protocol.md.
@@ -37,7 +39,6 @@
 
 #define SCHEDULE_MARGIN_TICKS (200ull * TICKS_PER_SERVICE)   /* ~1ms headroom before START's chosen start tick */
 #define RESPONSE_BUF_LEN       (AXIS_MAX_PAYLOAD + 256u)
-#define BLOCK_LEN              32u   /* samples per DATA block, all streams */
 
 typedef enum {
     ST_IDLE = 0, ST_UPLOADING, ST_READY, ST_ARMED, ST_RUNNING, ST_COMPLETE, ST_FAULT
@@ -59,6 +60,7 @@ static uint32_t g_segment_count = 0;
 static char g_manifest_hash_hex[65];
 static char g_command_hash_hex[65];
 static uint64_t g_arm_deadline = 0;
+static bool g_flushed_this_run = false; /* final partial chunk pushed exactly once per run */
 
 /* ------------------------------- framing -------------------------------- */
 
@@ -84,8 +86,13 @@ static void send_frame(uint8_t kind, uint32_t seq, const uint8_t *payload, uint3
     header[16] = (uint8_t)(crc); header[17] = (uint8_t)(crc >> 8);
     header[18] = (uint8_t)(crc >> 16); header[19] = (uint8_t)(crc >> 24);
 
-    Serial.write(header, AXIS_HEADER_LEN);
-    if (payload_len) Serial.write(payload, payload_len);
+    /* USB CDC may return short/zero after its transmit timeout. Never
+     * start the next frame while this one's bytes are still outstanding.
+     * Interrupts stay enabled: watchdog/overflow still stop outputs locally. */
+    auto write = [](const uint8_t *p, size_t n) { return Serial.write(p, n); };
+    auto wait = []() { delay(1); };
+    stream_write_all(header, AXIS_HEADER_LEN, write, wait);
+    stream_write_all(payload, payload_len, write, wait);
 }
 
 static void try_parse_frames(void) {
@@ -207,8 +214,17 @@ static bool check_run_id(JsonVariantConst doc, uint32_t seq, const char *op) {
 static void fault_from_hw(void) {
     axis_status_t st;
     axis_hw_get_status(&st);
+    bool was_running = (g_state == ST_RUNNING);
     if (st.fault && g_state != ST_FAULT) g_state = ST_FAULT;
     else if (st.complete && g_state == ST_RUNNING) g_state = ST_COMPLETE;
+
+    /* Push streaming leaves the final, possibly-partial chunk sitting in
+     * the active half with nothing to ever fill it the rest of the way --
+     * flush it once, right as the run reaches a terminal state. */
+    if (was_running && (g_state == ST_FAULT || g_state == ST_COMPLETE) && !g_flushed_this_run) {
+        for (uint32_t s = 0; s < NUM_CAPTURE_STREAMS; s++) capstream_flush(capstream_instance(s));
+        g_flushed_this_run = true;
+    }
 }
 
 /* --------------------------- canonical manifest --------------------------- */
@@ -217,6 +233,7 @@ static const char *output_mode_name(output_mode_t m) {
         case OUTPUT_STEP_DIR: return "step_dir";
         case OUTPUT_QUADRATURE_COMMAND: return "quadrature_command";
         case OUTPUT_ANALOG_PWM_RC: return "analog_effort";
+        case OUTPUT_ANALOG_POSITION_SERVO: return "analog_position_servo";
     }
     return "step_dir";
 }
@@ -224,9 +241,13 @@ static const char *output_mode_name(output_mode_t m) {
 /* This firmware's own fixed-key-order reconstruction of the accepted
  * manifest fields -- see the file header note on why this stands in for
  * a generic RFC 8785 canonicalizer. */
-static size_t build_canonical_manifest(char *buf, size_t cap) {
+static void manifest_hash_sink(void *ctx, const char *bytes, size_t len) {
+    sha256_update((sha256_ctx *)ctx, (const uint8_t *)bytes, len);
+}
+
+static size_t build_canonical_manifest(sha256_ctx *ctx) {
     json_writer_t w;
-    jw_init(&w, buf, cap);
+    jw_init_sink(&w, manifest_hash_sink, ctx);
     jw_obj_begin(&w);
     jw_kv_str(&w, "drive_interpretation", g_drive_interpretation);
     jw_kv_str(&w, "output_mode", output_mode_name(g_rc.output_mode));
@@ -242,6 +263,14 @@ static size_t build_canonical_manifest(char *buf, size_t cap) {
     jw_kv_u64(&w, "dir_hold_ticks", g_rc.dir_hold_ticks);
     jw_kv_bool(&w, "quadrature_invert", g_rc.quadrature_invert);
     jw_kv_i64(&w, "analog_output_full_scale", g_rc.analog_output_full_scale);
+    if (g_rc.output_mode == OUTPUT_ANALOG_POSITION_SERVO) {
+        jw_kv_i64(&w, "servo_position_kp_q8", g_rc.servo.position_kp_q8);
+        jw_kv_i64(&w, "servo_velocity_kp_q8", g_rc.servo.velocity_kp_q8);
+        jw_kv_i64(&w, "servo_velocity_ki_q8", g_rc.servo.velocity_ki_q8);
+        jw_kv_i64(&w, "servo_torque_limit_code", g_rc.servo.torque_limit_code);
+        jw_kv_i64(&w, "servo_error_limit_counts", g_rc.servo.error_limit_counts);
+        jw_kv_i64(&w, "servo_velocity_clamp", g_rc.servo.velocity_clamp);
+    }
 
     jw_key(&w, "encoders");
     jw_arr_begin(&w);
@@ -292,7 +321,7 @@ static void handle_HELLO(uint32_t seq) {
     jw_kv_str(&w, "op", "HELLO");
     jw_kv_u64(&w, "version", 1);
     jw_kv_str(&w, "device_serial", g_device_serial);
-    jw_kv_str(&w, "firmware_version", "0.1.0");
+    jw_kv_str(&w, "firmware_version", "0.2.0");
     jw_kv_u64(&w, "boot_id", g_boot_id);
     jw_kv_u64(&w, "tick_hz", TICK_HZ);
     jw_kv_u64(&w, "tick_width", 64);
@@ -301,6 +330,7 @@ static void handle_HELLO(uint32_t seq) {
     jw_key(&w, "output_modes");
     jw_arr_begin(&w);
     jw_str(&w, "step_dir"); jw_str(&w, "quadrature_command"); jw_str(&w, "analog_effort");
+    jw_str(&w, "analog_position_servo");
     jw_arr_end(&w);
 
     jw_key(&w, "step_dir");
@@ -320,6 +350,14 @@ static void handle_HELLO(uint32_t seq) {
                           "channel (PIN_PWM_POS/PIN_PWM_NEG) plus a downstream differential-input stage");
     jw_obj_end(&w);
 
+    jw_key(&w, "analog_position_servo"); jw_obj_begin(&w);
+    jw_kv_str(&w, "controller", "analog-servo Control.c");
+    jw_kv_str(&w, "source_sha256", AXIS_PID_SOURCE_SHA256);
+    jw_kv_u64(&w, "control_tick_hz", 1000);
+    jw_kv_u64(&w, "telemetry_stream_id", STREAM_ANALOG);
+    jw_kv_str(&w, "telemetry_channels", "effort_code,reference_count; NOT ADC");
+    jw_obj_end(&w);
+
     jw_kv_u64(&w, "encoder_count", NUM_ENCODERS);
     jw_key(&w, "encoder_decode_mults");
     jw_arr_begin(&w); jw_u64(&w, 4); jw_arr_end(&w);
@@ -328,12 +366,17 @@ static void handle_HELLO(uint32_t seq) {
     jw_kv_u64(&w, "analog_channels", NUM_ANALOG_CHANNELS);
     jw_kv_u64(&w, "analog_raw_bits", 12);
     jw_kv_bool(&w, "analog_simultaneous", false);
-    jw_kv_u64(&w, "analog_min_period_ticks", 50ull * TICKS_PER_SERVICE);
+    jw_kv_u64(&w, "analog_min_period_ticks", ANALOG_MIN_PERIOD_TICKS);
 
     jw_key(&w, "memory");
     jw_obj_begin(&w);
     jw_kv_u64(&w, "max_command_samples", MAX_COMMAND_SAMPLES);
-    jw_kv_u64(&w, "max_capture_samples_per_stream", MAX_CAPTURE_SAMPLES);
+    /* Capture is unsolicited-push streamed, not buffered on-device: there is
+     * no sample-count ceiling here. Real limits are host/USB drain rate and
+     * run duration; see the DATA push cadence below and GET_RUN's per-stream
+     * "frames_pushed"/sha256 for after-the-fact completeness verification. */
+    jw_kv_str(&w, "capture_mode", "push_streamed");
+    jw_kv_u64(&w, "push_chunk_samples", PUSH_CHUNK_SAMPLES);
     jw_obj_end(&w);
 
     jw_key(&w, "codecs");
@@ -483,7 +526,22 @@ static void handle_BEGIN(uint32_t seq, JsonVariantConst doc) {
     if (!strcmp(outmode, "step_dir")) rc.output_mode = OUTPUT_STEP_DIR;
     else if (!strcmp(outmode, "quadrature_command")) rc.output_mode = OUTPUT_QUADRATURE_COMMAND;
     else if (!strcmp(outmode, "analog_effort")) rc.output_mode = OUTPUT_ANALOG_PWM_RC;
-    else { send_error(seq, "BEGIN", "UNSUPPORTED", "output_mode must be step_dir, quadrature_command, or analog_effort"); return; }
+    else if (!strcmp(outmode, "analog_position_servo")) rc.output_mode = OUTPUT_ANALOG_POSITION_SERVO;
+    else { send_error(seq, "BEGIN", "UNSUPPORTED", "unknown output_mode"); return; }
+    if (rc.output_mode == OUTPUT_ANALOG_POSITION_SERVO) {
+        if (strcmp(drive, "position")) { send_error(seq, "BEGIN", "RANGE", "servo requires position references"); return; }
+        const char *names[] = {"servo_position_kp_q8", "servo_velocity_kp_q8", "servo_velocity_ki_q8",
+            "servo_torque_limit_code", "servo_error_limit_counts", "servo_velocity_clamp"};
+        int32_t *fields[] = {&rc.servo.position_kp_q8, &rc.servo.velocity_kp_q8, &rc.servo.velocity_ki_q8,
+            &rc.servo.torque_limit_code, &rc.servo.error_limit_counts, &rc.servo.velocity_clamp};
+        for (unsigned i=0; i<6; i++) {
+            int64_t value;
+            if (!get_i64(m, names[i], &value, 0, true) || value<0 || value>2147483647LL) {
+                send_error(seq, "BEGIN", "RANGE", "invalid servo parameter"); return;
+            }
+            *fields[i]=(int32_t)value;
+        }
+    }
 
     uint64_t u;
     bool ok = true;
@@ -572,21 +630,6 @@ static void handle_BEGIN(uint32_t seq, JsonVariantConst doc) {
     const char *hw_err = axis_hw_validate_config(&rc);
     if (hw_err) { send_error(seq, "BEGIN", hw_err, "rejected by hardware capability check"); return; }
 
-    /* Capture storage budget: fail now (MEMORY) rather than silently
-     * truncating a run neither side can tell was cut short. */
-    uint64_t run_ticks = rc.capture_pre_roll_ticks
-        + (uint64_t)rc.command_sample_count * rc.command_period_ticks
-        + rc.capture_post_roll_ticks;
-    for (uint32_t i = 0; i < NUM_ENCODERS; i++) {
-        if (!rc.encoder_enabled[i]) continue;
-        uint64_t need = run_ticks / rc.encoder_sample_period_ticks + 2;
-        if (need > MAX_CAPTURE_SAMPLES) { send_error(seq, "BEGIN", "MEMORY", "encoder capture would exceed buffer capacity"); return; }
-    }
-    if (rc.analog_enabled) {
-        uint64_t need = (run_ticks / rc.analog_sample_period_ticks + 2) * NUM_ANALOG_CHANNELS;
-        if (need > MAX_CAPTURE_SAMPLES) { send_error(seq, "BEGIN", "MEMORY", "analog capture would exceed buffer capacity"); return; }
-    }
-
     /* Accepted: commit state. */
     g_rc = rc;
     strncpy(g_run_id, rid, sizeof(g_run_id) - 1);
@@ -598,21 +641,19 @@ static void handle_BEGIN(uint32_t seq, JsonVariantConst doc) {
 
     cmdbuf_reset(cmdbuf_instance(), g_rc.command_sample_count);
     for (uint32_t i = 0; i < NUM_ENCODERS; i++) {
-        uint64_t cap = g_rc.encoder_enabled[i] ? (run_ticks / g_rc.encoder_sample_period_ticks + 2) : 0;
-        capstream_reset(capstream_instance(i), (uint32_t)cap, g_rc.encoder_sample_period_ticks, 1);
+        capstream_reset(capstream_instance(i), g_rc.encoder_sample_period_ticks, 1, true /* widen to i64 */);
     }
-    {
-        uint64_t cap = g_rc.analog_enabled ? (run_ticks / g_rc.analog_sample_period_ticks + 2) : 0;
-        capstream_reset(capstream_instance(STREAM_ANALOG), (uint32_t)cap, g_rc.analog_sample_period_ticks, NUM_ANALOG_CHANNELS);
-    }
+    capstream_reset(capstream_instance(STREAM_ANALOG), g_rc.analog_sample_period_ticks,
+                     NUM_ANALOG_CHANNELS, false /* raw_i32 */);
+    g_flushed_this_run = false;
 
     axis_hw_configure(&g_rc);
 
-    char canon[RESPONSE_BUF_LEN];
-    size_t n = build_canonical_manifest(canon, sizeof(canon));
+    /* Do not put a 2KB canonical buffer on the stack while the parsed
+     * request still occupies the heap: they collide on this 20KB MCU. */
     uint8_t digest[32];
     sha256_ctx ctx; sha256_init(&ctx);
-    sha256_update(&ctx, (const uint8_t *)canon, n);
+    build_canonical_manifest(&ctx);
     sha256_final(&ctx, digest);
     sha256_hex(digest, g_manifest_hash_hex);
 
@@ -708,7 +749,15 @@ static void handle_SEAL(uint32_t seq, JsonVariantConst doc) {
      * and that pulse width fits within that same window twice over.
      * Doesn't apply to analog_effort: there are no edges, just a held
      * code per interval (zero-order hold). */
-    if (g_rc.output_mode != OUTPUT_ANALOG_PWM_RC) {
+    if (g_rc.output_mode == OUTPUT_ANALOG_POSITION_SERVO) {
+        for (uint32_t i=0; i<g_rc.command_sample_count; i++) {
+            int32_t v=cmdbuf_value_at(cb,i);
+            if (v>4096 || v<-4096 || ((i==0 || i+1==g_rc.command_sample_count) && v!=0)) {
+                send_error(seq, "SEAL", "RANGE", "servo references need zero endpoints and magnitude <=4096 counts"); return;
+            }
+        }
+    }
+    if (!axis_output_is_pwm(g_rc.output_mode)) {
         uint32_t min_ticks_per_edge = 2 * TICKS_PER_SERVICE;
         if (g_rc.output_mode == OUTPUT_STEP_DIR && 2 * g_rc.step_pulse_width_ticks > min_ticks_per_edge) {
             min_ticks_per_edge = 2 * g_rc.step_pulse_width_ticks;
@@ -824,6 +873,9 @@ static void handle_ABORT(uint32_t seq, JsonVariantConst doc) {
     if (g_have_run && !check_run_id(doc, seq, "ABORT")) return;
 
     axis_hw_abort(FAULT_HOST_ABORT);
+    /* Preserve the RUNNING -> FAULT transition so the final partial
+     * capture chunks are flushed, just as for local watchdog/overflow. */
+    fault_from_hw();
     g_state = ST_FAULT;
 
     char buf[96];
@@ -869,25 +921,28 @@ static void handle_GET_RUN(uint32_t seq, JsonVariantConst doc) {
     jw_key(&w, "streams");
     jw_arr_begin(&w);
     for (uint32_t s = 0; s < NUM_CAPTURE_STREAMS; s++) {
-        bool enabled = (s < NUM_ENCODERS) ? g_rc.encoder_enabled[s] : g_rc.analog_enabled;
+        bool enabled = axis_stream_enabled(&g_rc, s);
         if (!enabled) continue;
         capture_stream_t *cs = capstream_instance(s);
         jw_obj_begin(&w);
         jw_kv_u64(&w, "stream_id", s);
-        jw_kv_str(&w, "role", (s < NUM_ENCODERS) ? "encoder" : "analog");
+        jw_kv_str(&w, "role", (s < NUM_ENCODERS) ? "encoder" :
+            (g_rc.output_mode == OUTPUT_ANALOG_POSITION_SERVO ? "servo_effort_reference" : "analog"));
         jw_kv_u64(&w, "channels", cs->channels);
         jw_kv_u64(&w, "period_ticks", cs->period_ticks);
         jw_kv_u64(&w, "first_sample_tick", cs->first_sample_tick);
         jw_kv_u64(&w, "sample_count", cs->count);
-        jw_kv_u64(&w, "block_len", BLOCK_LEN);
-        jw_kv_u64(&w, "block_count", cs->count ? ((cs->count + BLOCK_LEN - 1) / BLOCK_LEN) : 0);
+        /* Total DATA frames actually pushed for this stream this run --
+         * compare against the host's own received-frame count as a cheap
+         * completeness check, on top of the per-frame push sequence. */
+        jw_kv_u64(&w, "frames_pushed", cs->next_push_seq);
         jw_key(&w, "codecs");
         jw_arr_begin(&w);
         if (s < NUM_ENCODERS) { jw_str(&w, "raw_i64"); jw_str(&w, "delta_rle_i32"); }
         else jw_str(&w, "raw_i32");
         jw_arr_end(&w);
         uint8_t digest[32]; char hex[65];
-        capstream_hash(cs, s < NUM_ENCODERS, digest);
+        capstream_final_hash(cs, digest);
         sha256_hex(digest, hex);
         jw_kv_str(&w, "sha256", hex);
         jw_obj_end(&w);
@@ -911,50 +966,49 @@ static void handle_GET_RUN(uint32_t seq, JsonVariantConst doc) {
     else send_error(seq, "GET_RUN", "INTERNAL", "response buffer overflow");
 }
 
-/* --------------------------------- GET_BLOCK --------------------------------- */
+/* ------------------------------ capture push ------------------------------ */
 
-static void handle_GET_BLOCK(uint32_t seq, JsonVariantConst doc) {
-    fault_from_hw();
-    if (g_state != ST_COMPLETE && g_state != ST_FAULT) {
-        send_error(seq, "GET_BLOCK", "STATE", "run data is only available after COMPLETE or FAULT");
+/* Builds and sends one unsolicited DATA frame from whatever capstream_drain
+ * finds pending for this stream, if anything. DATA's `block_index` field is
+ * repurposed as this stream's own push-sequence counter (see run_buffer.h);
+ * `sequence`=0 marks the frame itself as unsolicited, per the wire doc's
+ * "0 reserved for unsolicited events". A no-op if nothing is pending. */
+static void push_stream_data(uint32_t stream_id, capture_stream_t *cs, uint8_t codec) {
+    static uint8_t payload[24 + (PUSH_CHUNK_SAMPLES * NUM_ANALOG_CHANNELS * 8)];
+    uint32_t sample_count, seq, body_len;
+    uint64_t first_tick;
+    if (!capstream_drain(cs, codec, payload + 24, sizeof(payload) - 24,
+                          &sample_count, &first_tick, &seq, &body_len)) {
         return;
     }
-    if (!check_run_id(doc, seq, "GET_BLOCK")) return;
-
-    uint64_t stream_id, block_index;
-    if (!get_u64(doc, "stream_id", &stream_id, 0, true) || stream_id >= NUM_CAPTURE_STREAMS) {
-        send_error(seq, "GET_BLOCK", "RANGE", "invalid stream_id"); return;
-    }
-    if (!get_u64(doc, "block_index", &block_index, 0, true) || block_index > MAX_CAPTURE_SAMPLES) {
-        send_error(seq, "GET_BLOCK", "RANGE", "invalid block_index"); return;
-    }
-    const char *codec_name = doc["codec"] | ((stream_id < NUM_ENCODERS) ? "raw_i64" : "raw_i32");
-    uint8_t codec = !strcmp(codec_name, "raw_i64") ? 1 : !strcmp(codec_name, "delta_rle_i32") ? 2 :
-                    !strcmp(codec_name, "raw_i32") ? 3 : 0;
-    if (!codec) { send_error(seq, "GET_BLOCK", "UNSUPPORTED", "unknown codec"); return; }
-
-    capture_stream_t *cs = capstream_instance((uint32_t)stream_id);
-    static uint8_t payload[24 + (BLOCK_LEN * NUM_ANALOG_CHANNELS * 8) + 64];
-    uint32_t encoded = capstream_encode_block(cs, (uint32_t)block_index, BLOCK_LEN, codec,
-                                               payload + 24, sizeof(payload) - 24);
-    if (encoded == 0) { send_error(seq, "GET_BLOCK", "RANGE", "no such block"); return; }
-
-    uint32_t start = (uint32_t)block_index * BLOCK_LEN;
-    uint32_t avail = cs->count - start;
-    uint32_t n = (avail < BLOCK_LEN) ? avail : BLOCK_LEN;
 
     payload[0] = (uint8_t)stream_id; payload[1] = (uint8_t)(stream_id >> 8);
     payload[2] = (uint8_t)(stream_id >> 16); payload[3] = (uint8_t)(stream_id >> 24);
-    payload[4] = (uint8_t)block_index; payload[5] = (uint8_t)(block_index >> 8);
-    payload[6] = (uint8_t)(block_index >> 16); payload[7] = (uint8_t)(block_index >> 24);
-    uint64_t first_tick = cs->first_sample_tick + start * cs->period_ticks;
+    payload[4] = (uint8_t)seq; payload[5] = (uint8_t)(seq >> 8);
+    payload[6] = (uint8_t)(seq >> 16); payload[7] = (uint8_t)(seq >> 24);
     for (int b = 0; b < 8; b++) payload[8 + b] = (uint8_t)(first_tick >> (8 * b));
-    payload[16] = (uint8_t)n; payload[17] = (uint8_t)(n >> 8);
-    payload[18] = (uint8_t)(n >> 16); payload[19] = (uint8_t)(n >> 24);
+    payload[16] = (uint8_t)sample_count; payload[17] = (uint8_t)(sample_count >> 8);
+    payload[18] = (uint8_t)(sample_count >> 16); payload[19] = (uint8_t)(sample_count >> 24);
     payload[20] = codec;
     payload[21] = payload[22] = payload[23] = 0;
 
-    send_frame(4 /* DATA */, seq, payload, 24 + encoded);
+    send_frame(4 /* DATA */, 0 /* unsolicited */, payload, 24 + body_len);
+}
+
+/* Drains and pushes every stream with a pending chunk. Each stream can have
+ * at most one chunk pending under normal operation (capstream_append faults
+ * the run before a third chunk's worth could ever queue up), so draining
+ * twice per stream is enough to catch both halves without an unbounded loop. */
+static void capture_streams_service(void) {
+    if (!g_have_run) return;
+    for (uint32_t s = 0; s < NUM_CAPTURE_STREAMS; s++) {
+        bool enabled = axis_stream_enabled(&g_rc, s);
+        if (!enabled) continue;
+        uint8_t codec = (s < NUM_ENCODERS) ? 1 /* raw_i64 */ : 3 /* raw_i32 */;
+        capture_stream_t *cs = capstream_instance(s);
+        push_stream_data(s, cs, codec);
+        push_stream_data(s, cs, codec);
+    }
 }
 
 /* ----------------------------------- CLEAR ----------------------------------- */
@@ -967,7 +1021,7 @@ static void handle_CLEAR(uint32_t seq, JsonVariantConst doc) {
     }
     if (!check_run_id(doc, seq, "CLEAR")) return;
 
-    axis_hw_set_idle_outputs();
+    axis_hw_clear_run();
     g_have_run = false;
     g_state = ST_IDLE;
 
@@ -1004,7 +1058,6 @@ static void handle_request_json(uint32_t seq, const char *json, size_t len) {
     else if (!strcmp(op, "KEEPALIVE")) handle_KEEPALIVE(seq, doc.as<JsonVariantConst>());
     else if (!strcmp(op, "ABORT")) handle_ABORT(seq, doc.as<JsonVariantConst>());
     else if (!strcmp(op, "GET_RUN")) handle_GET_RUN(seq, doc.as<JsonVariantConst>());
-    else if (!strcmp(op, "GET_BLOCK")) handle_GET_BLOCK(seq, doc.as<JsonVariantConst>());
     else if (!strcmp(op, "CLEAR")) handle_CLEAR(seq, doc.as<JsonVariantConst>());
     else send_error(seq, op, "UNSUPPORTED", "unknown op");
 }
@@ -1027,7 +1080,8 @@ void protocol_init(void) {
 void protocol_poll(void) {
     fault_from_hw();
     if (g_state == ST_ARMED && axis_hw_now_ticks() > g_arm_deadline) {
-        axis_hw_set_idle_outputs();
+        axis_hw_clear_run();
         g_state = ST_READY;
     }
+    capture_streams_service();
 }

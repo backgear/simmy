@@ -21,9 +21,14 @@ typedef struct {
     int depth;
     bool need_comma[JW_MAX_DEPTH];
     bool overflow;
+    void (*sink)(void *ctx, const char *bytes, size_t len);
+    void *sink_ctx;
 } json_writer_t;
 
 void jw_init(json_writer_t *w, char *buf, size_t cap);
+/* Streaming mode, e.g. canonical manifest hashing without a large buffer. */
+void jw_init_sink(json_writer_t *w,
+                  void (*sink)(void *, const char *, size_t), void *ctx);
 void jw_obj_begin(json_writer_t *w);
 void jw_obj_end(json_writer_t *w);
 void jw_arr_begin(json_writer_t *w);

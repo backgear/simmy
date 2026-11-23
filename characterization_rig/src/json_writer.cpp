@@ -20,12 +20,26 @@ void jw_init(json_writer_t *w, char *buf, size_t cap) {
     w->len = 0;
     w->depth = 0;
     w->overflow = false;
+    w->sink = nullptr;
+    w->sink_ctx = nullptr;
     for (int i = 0; i < JW_MAX_DEPTH; i++) w->need_comma[i] = false;
     s_awaiting_value = false;
 }
 
+void jw_init_sink(json_writer_t *w,
+                  void (*sink)(void *, const char *, size_t), void *ctx) {
+    jw_init(w, nullptr, 0);
+    w->sink = sink;
+    w->sink_ctx = ctx;
+}
+
 static void put(json_writer_t *w, const char *s, size_t n) {
     if (w->overflow) return;
+    if (w->sink) {
+        w->sink(w->sink_ctx, s, n);
+        w->len += n;
+        return;
+    }
     if (w->len + n >= w->cap) { w->overflow = true; return; }
     memcpy(w->buf + w->len, s, n);
     w->len += n;
@@ -105,15 +119,28 @@ void jw_raw(json_writer_t *w, const char *literal) {
     put(w, literal, strlen(literal));
 }
 
+/* Embedded printf implementations (notably newlib-nano) may omit the
+ * long-long formats. Convert directly so every target emits JSON numbers. */
+static void decimal(json_writer_t *w, uint64_t magnitude, bool negative) {
+    char buf[21]; /* 20 decimal digits plus an optional minus sign */
+    char *end = buf + sizeof(buf);
+    char *p = end;
+    do {
+        *--p = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+    if (negative) *--p = '-';
+    begin_element(w);
+    put(w, p, (size_t)(end - p));
+}
+
 void jw_i64(json_writer_t *w, int64_t v) {
-    char buf[24];
-    snprintf(buf, sizeof(buf), "%lld", (long long)v);
-    jw_raw(w, buf);
+    /* Unsigned subtraction also handles INT64_MIN without signed overflow. */
+    uint64_t magnitude = v < 0 ? UINT64_C(0) - (uint64_t)v : (uint64_t)v;
+    decimal(w, magnitude, v < 0);
 }
 void jw_u64(json_writer_t *w, uint64_t v) {
-    char buf[24];
-    snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v);
-    jw_raw(w, buf);
+    decimal(w, v, false);
 }
 void jw_bool(json_writer_t *w, bool v) { jw_raw(w, v ? "true" : "false"); }
 void jw_null(json_writer_t *w) { jw_raw(w, "null"); }

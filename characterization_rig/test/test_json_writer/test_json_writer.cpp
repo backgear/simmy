@@ -96,6 +96,51 @@ static void test_negative_and_large_integers(void) {
         "{\"neg\":-12345,\"min64\":-9223372036854775808,\"max64\":18446744073709551615}", buf);
 }
 
+static void test_integer_decimal_boundaries(void) {
+    char buf[256];
+    json_writer_t w;
+    jw_init(&w, buf, sizeof(buf));
+    jw_obj_begin(&w);
+    jw_kv_u64(&w, "version", 1);
+    jw_key(&w, "values");
+    jw_arr_begin(&w);
+    jw_i64(&w, 0);
+    jw_u64(&w, 0);
+    jw_i64(&w, -1);
+    jw_u64(&w, UINT64_C(4294967296));
+    jw_i64(&w, INT64_MAX);
+    jw_arr_end(&w);
+    jw_obj_end(&w);
+    finish_and_terminate(&w);
+
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"version\":1,\"values\":[0,0,-1,4294967296,9223372036854775807]}", buf);
+}
+
+struct sink_buffer_t { char bytes[128]; size_t len; };
+static void collect_sink(void *ctx, const char *bytes, size_t len) {
+    sink_buffer_t *s = (sink_buffer_t *)ctx;
+    memcpy(s->bytes + s->len, bytes, len);
+    s->len += len;
+}
+static void test_streaming_sink_matches_buffer(void) {
+    sink_buffer_t sink = {{0}, 0};
+    json_writer_t w;
+    jw_init_sink(&w, collect_sink, &sink);
+    jw_obj_begin(&w);
+    jw_kv_str(&w, "msg", "line\n\"quoted\"");
+    jw_kv_i64(&w, "min", INT64_MIN);
+    jw_obj_end(&w);
+    TEST_ASSERT_EQUAL_UINT32(sink.len, jw_finish(&w));
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"msg\":\"line\\n\\\"quoted\\\"\",\"min\":-9223372036854775808}", sink.bytes);
+    char buf[8];
+    jw_init(&w, buf, sizeof(buf));
+    jw_u64(&w, 123);
+    finish_and_terminate(&w);
+    TEST_ASSERT_EQUAL_STRING("123", buf);
+}
+
 static void test_overflow_is_reported_not_corrupted(void) {
     char buf[8]; /* far too small for even one key */
     json_writer_t w;
@@ -115,6 +160,8 @@ int main(void) {
     RUN_TEST(test_empty_array_and_object);
     RUN_TEST(test_string_escaping);
     RUN_TEST(test_negative_and_large_integers);
+    RUN_TEST(test_integer_decimal_boundaries);
+    RUN_TEST(test_streaming_sink_matches_buffer);
     RUN_TEST(test_overflow_is_reported_not_corrupted);
     return UNITY_END();
 }

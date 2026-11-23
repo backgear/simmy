@@ -50,13 +50,20 @@ a universal default, per the protocol's own framing.
 | PWM positive / negative | PA6 / PA7 | `output_mode: analog_effort`; TIM3 CH1/CH2, 32kHz carrier -- needs an external RC low-pass per channel (see below) |
 | drive ENABLE | PA10 | polarity from manifest |
 | ESTOP input | PB0 | active-low, pulled up; optional external switch |
-| Encoder 0 A/B | PA0/PA1 | TIM2 hardware encoder (x4 only) |
-| Encoder 1 A/B | PB6/PB7 | TIM4 hardware encoder (x4 only) |
+| Encoder 0 A/B | PB6/PB7 | TIM4 hardware encoder (x4 only) -- matches the sibling `~/analog-servo-f103` bench wiring, so switching between the two needs no rewiring |
+| Encoder 1 A/B | PA0/PA1 | TIM2 hardware encoder (x4 only) |
 | Analog 0 | PA4 | ADC1, 12-bit |
 | Analog 1 | PA5 | ADC1, 12-bit |
+| USB detach pulse | PB12 | optional jumper to PA12/D+; 100 ms open-drain low at startup, then high impedance |
 
-TIM1 is reserved entirely as the device's real-time engine: a 200kHz
-(5us) service ISR that is the tick counter, step-edge scheduler, capture
+Startup disables JTAG but **keeps SWD on PA13/PA14 enabled** for ST-Link.
+With power removed, fit a PB12–PA12 jumper to test USB detach and re-enumeration
+after reset. PB12 is never driven high; it is released before USB initialization.
+Without the jumper, the pulse does not affect USB. Re-enumeration is not
+guaranteed; a physical power cycle can still be necessary.
+
+TIM1 is reserved entirely as the device's real-time engine: a 40kHz
+(25us) service ISR that is the tick counter, step-edge scheduler, capture
 latch, and watchdog/estop/travel-limit check -- see the file header in
 `src/axis_hw.cpp` for exactly how each piece works and its honest timing
 error bound (`HELLO.max_timing_error_ticks`).
@@ -76,6 +83,20 @@ scaled by the manifest's `analog_output_full_scale`), not a cumulative
 digital count -- unlike `step_dir`/`quadrature_command`, there's no
 edge-rate feasibility check at `SEAL` for this mode.
 
+### Closed-loop position output (`output_mode: analog_position_servo`)
+
+The shared production cascade runs at 1 kHz using encoder 0 count differences.
+Uploaded commands are position references, not effort samples. Stream 2 records
+`[effort_code, reference_count]` at 1 kHz; it is virtual telemetry, not ADC data.
+After the finite reference schedule, postroll forces zero effort rather than
+continuing to hold position. See the [protocol](../docs/axis_device_protocol.md)
+for gain fields, source identity and configuration guards.
+
+The drive's physical jumper may keep it enabled independently of PA10. A zero
+command is neither a brake nor electrical isolation. Host tools do not clear
+external drive faults or restart paused powered tests automatically. ADC timing
+is not qualified for identification; use encoder-only acquisition.
+
 ## Deliberate simplifications (all surfaced honestly in HELLO/errors, not silent)
 
 - **Only 2 encoders, not "up to 4".** TIM3's encoder-capable pins are
@@ -94,18 +115,22 @@ edge-rate feasibility check at `SEAL` for this mode.
   tick** in every command interval (checked as a feasibility condition,
   not discovered at runtime), so the ISR never needs a catch-up loop.
   Declared via `HELLO.service_tick_hz`.
-- **Declared capacities are intentionally modest** (`MAX_COMMAND_SAMPLES`,
-  `MAX_CAPTURE_SAMPLES` in `include/axis_config.h`): the C8 variant has
-  only 20KB of SRAM total, shared with the USB CDC stack, ArduinoJson's
-  parse buffer, and the call stack. `pio run` reports ~80% RAM / ~87%
-  flash used at these settings; the `bluepill_f103c8_128k` board (same
-  RAM, more flash) is available if flash becomes the constraint instead.
+- **The command buffer is the one capacity that's still intentionally
+  modest** (`MAX_COMMAND_SAMPLES` in `include/axis_config.h`): the C8
+  variant has only 20KB of SRAM total, shared with the USB CDC stack,
+  ArduinoJson's parse buffer, and the call stack. Capture no longer
+  buffers a whole run at all -- see `run_buffer.h`'s file header --
+  so it isn't bounded by `MAX_CAPTURE_SAMPLES` (that constant is gone);
+  each capture stream costs a fixed, tiny double buffer
+  (`PUSH_CHUNK_SAMPLES` samples x2) independent of run length instead.
+  Check the current build's RAM and flash report before changing capacities.
+  The `bluepill_f103c8_128k` board has more flash but the same RAM.
 
 ## Not implemented / explicitly out of scope here
 
 This firmware does not attempt the acceptance-test golden vectors the
 protocol document calls for (CRC/framing fuzzing, RLE reconstruction
-cross-checks, corrupt/reordered block handling, logic-analyzer timing
+cross-checks, corrupt/reordered chunk handling, logic-analyzer timing
 verification, etc.) -- those are the "implementation and interoperability
 tests...still required before hardware characterization is automatic"
 that the protocol document itself says are a separate, necessary step.

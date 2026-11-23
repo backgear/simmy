@@ -53,7 +53,12 @@ static volatile uint64_t g_fault_tick = 0;
 
 /* ---- encoder extension state ---- */
 static TIM_HandleTypeDef s_enc_htim[NUM_ENCODERS];
-static TIM_TypeDef *const s_enc_TIMx[NUM_ENCODERS] = { TIM2, TIM4 };
+static TIM_TypeDef *const s_enc_TIMx[NUM_ENCODERS] = { TIM4, TIM2 };
+/* Encoder 0 = TIM4 (PB6/PB7), encoder 1 = TIM2 (PA0/PA1) -- deliberately
+ * swapped from timer-number order so "encoder 0" (what the closed-loop
+ * servo mode and every driver script's default hardcode) lands on the
+ * same physical pins the sibling ~/analog-servo-f103 bench wiring already
+ * uses, and the bench never needs rewiring to switch between the two. */
 static volatile int64_t s_enc_ext[NUM_ENCODERS];
 static uint16_t s_enc_last16[NUM_ENCODERS];
 static int64_t s_enc_origin[NUM_ENCODERS];
@@ -78,6 +83,9 @@ static uint8_t g_quad_index = 0;
 
 static uint64_t g_next_capture_tick[NUM_CAPTURE_STREAMS];
 static uint64_t g_watchdog_deadline = 0;
+static uint64_t g_next_servo_tick = 0;
+static bool g_servo_initialized = false;
+static int32_t g_servo_effort = 0, g_servo_reference = 0;
 
 static inline void write_step_dir_idle(void) {
     digitalWrite(PIN_STEP, g_cfg_valid && g_cfg.output_idle_level_high ? HIGH : LOW);
@@ -86,7 +94,7 @@ static inline void write_step_dir_idle(void) {
 static void analog_pwm_write(int32_t code); /* defined below, used by axis_hw_set_idle_outputs */
 
 void axis_hw_set_idle_outputs(void) {
-    if (g_cfg_valid && g_cfg.output_mode == OUTPUT_ANALOG_PWM_RC) {
+    if (g_cfg_valid && axis_output_is_pwm(g_cfg.output_mode)) {
         if (s_pwm_started) analog_pwm_write(0);
     } else {
         pinMode(PIN_STEP, OUTPUT);
@@ -218,22 +226,61 @@ static void service_isr(void) {
         g_step_pin_high = false;
     }
 
+    /* The 1kHz production controller runs on encoder feedback, not USB timing.
+     * After the finite reference schedule, force zero throughout post-roll. */
+    if (g_cfg.output_mode == OUTPUT_ANALOG_POSITION_SERVO && g_tick >= g_command_start_tick
+        && g_tick >= g_next_servo_tick) {
+        uint64_t elapsed = g_tick - g_command_start_tick;
+        uint32_t interval = (uint32_t)(elapsed / g_cfg.command_period_ticks);
+        if (g_tick - g_next_servo_tick >= 1000) {
+            g_phase = HW_FAULT; g_fault_reason = FAULT_CAPTURE_TIMING; g_fault_tick = g_tick;
+            axis_hw_set_idle_outputs(); return;
+        }
+        g_next_servo_tick += 1000;
+        int32_t position = (int32_t)(s_enc_ext[0] - s_enc_origin[0]);
+        if (!g_servo_initialized) {
+            axis_pid_init(&g_cfg.servo, position); g_servo_initialized = true;
+        }
+        g_servo_effort = 0;
+        if (interval < g_cfg.command_sample_count) {
+            g_cur_interval = interval;
+            g_servo_reference = cmdbuf_value_at(cmdbuf_instance(), interval);
+            if (!axis_pid_tick(g_servo_reference, position, &g_servo_effort)) {
+                g_phase = HW_FAULT; g_fault_reason = FAULT_INTERLOCK; g_fault_tick = g_tick;
+                axis_hw_set_idle_outputs(); return;
+            }
+        }
+        analog_pwm_write(g_servo_effort);
+    }
+
     /* ---- capture ---- */
     bool any_active_stream = false;
     for (uint32_t s = 0; s < NUM_CAPTURE_STREAMS; s++) {
         capture_stream_t *cs = capstream_instance(s);
-        bool enabled = (s < NUM_ENCODERS) ? g_cfg.encoder_enabled[s] : g_cfg.analog_enabled;
-        if (!enabled || cs->capacity == 0) continue;
+        bool enabled = axis_stream_enabled(&g_cfg, s);
+        if (!enabled) continue;
         any_active_stream = true;
         if (g_tick >= g_next_capture_tick[s]) {
             if (s < NUM_ENCODERS) {
                 int32_t v = (int32_t)s_enc_ext[s];
-                capstream_append(cs, &v);
+                if (!capstream_append(cs, &v)) {
+                    g_phase = HW_FAULT; g_fault_reason = FAULT_OVERFLOW; g_fault_tick = g_tick;
+                    axis_hw_set_idle_outputs();
+                    return;
+                }
             } else {
                 int32_t vals[NUM_ANALOG_CHANNELS];
-                vals[0] = analogRead(PIN_ANALOG0);
-                if (NUM_ANALOG_CHANNELS > 1) vals[1] = analogRead(PIN_ANALOG1);
-                capstream_append(cs, vals);
+                if (g_cfg.output_mode == OUTPUT_ANALOG_POSITION_SERVO) {
+                    vals[0] = g_servo_effort; vals[1] = g_servo_reference;
+                } else {
+                    vals[0] = analogRead(PIN_ANALOG0);
+                    if (NUM_ANALOG_CHANNELS > 1) vals[1] = analogRead(PIN_ANALOG1);
+                }
+                if (!capstream_append(cs, vals)) {
+                    g_phase = HW_FAULT; g_fault_reason = FAULT_OVERFLOW; g_fault_tick = g_tick;
+                    axis_hw_set_idle_outputs();
+                    return;
+                }
             }
             g_next_capture_tick[s] += cs->period_ticks;
         }
@@ -253,7 +300,7 @@ static void service_isr(void) {
                 g_cur_interval = interval;
                 analog_pwm_write(cmdbuf_value_at(cmdbuf_instance(), interval));
             }
-        } else if (interval < g_cfg.command_sample_count) {
+        } else if (interval < g_cfg.command_sample_count && !axis_output_is_pwm(g_cfg.output_mode)) {
             if (interval != g_cur_interval) {
                 g_cur_interval = interval;
                 command_buffer_t *cb = cmdbuf_instance();
@@ -379,8 +426,16 @@ const char *axis_hw_validate_config(const run_config_t *cfg) {
         if (cfg->encoder_decode_mult[i] != 4) return "UNSUPPORTED";
     }
     if (any_encoder && cfg->encoder_sample_period_ticks < TICKS_PER_SERVICE) return "LIMIT";
-    if (cfg->analog_enabled && cfg->analog_sample_period_ticks < 50u * TICKS_PER_SERVICE) return "LIMIT";
-    if (cfg->output_mode == OUTPUT_ANALOG_PWM_RC) {
+    if (cfg->analog_enabled && cfg->analog_sample_period_ticks < ANALOG_MIN_PERIOD_TICKS) return "LIMIT";
+    if (cfg->output_mode == OUTPUT_ANALOG_POSITION_SERVO) {
+        if (!axis_pid_validate(&cfg->servo) || !cfg->encoder_enabled[0] || cfg->encoder_invert[0]
+            || cfg->analog_enabled || cfg->output_enable_used || cfg->connection_policy != CONN_SUPERVISED
+            || !cfg->travel_limit_enabled[0] || cfg->travel_limit_counts[0] <= 0
+            || cfg->analog_output_full_scale != 32767 || cfg->analog_sample_period_ticks != 1000
+            || cfg->encoder_sample_period_ticks > 1000 || 1000 % cfg->encoder_sample_period_ticks
+            || cfg->command_period_ticks % 1000 || cfg->capture_pre_roll_ticks % 1000) return "RANGE";
+    }
+    if (axis_output_is_pwm(cfg->output_mode)) {
         if (cfg->analog_output_full_scale <= 0) return "RANGE";
     } else {
         if (cfg->step_pulse_width_ticks == 0) return "RANGE";
@@ -404,7 +459,7 @@ void axis_hw_configure(const run_config_t *cfg) {
     if (cfg->output_mode == OUTPUT_QUADRATURE_COMMAND) {
         pinMode(PIN_STEP, OUTPUT); /* reused as quadrature A */
         pinMode(PIN_DIR, OUTPUT);  /* reused as quadrature B */
-    } else if (cfg->output_mode == OUTPUT_ANALOG_PWM_RC && !s_pwm_started) {
+    } else if (axis_output_is_pwm(cfg->output_mode) && !s_pwm_started) {
         pwm_begin();
         s_pwm_started = true;
     }
@@ -412,14 +467,30 @@ void axis_hw_configure(const run_config_t *cfg) {
 }
 
 void axis_hw_latch_origin(void) {
+    noInterrupts();
     for (uint32_t i = 0; i < NUM_ENCODERS; i++) {
         enc_poll_extend(i);
         s_enc_origin[i] = s_enc_ext[i];
     }
-    g_phase = HW_ARMED;
     g_fault_reason = FAULT_NONE;
+    g_fault_tick = 0;
+    g_watchdog_deadline = g_tick + g_cfg.watchdog_timeout_ticks;
     pinMode(PIN_ENABLE, OUTPUT);
-    digitalWrite(PIN_ENABLE, g_cfg.enable_active_high ? HIGH : LOW);
+    /* Capture-only runs must not assert the drive-enable output. */
+    const bool enable = g_cfg.output_enable_used;
+    digitalWrite(PIN_ENABLE, enable == g_cfg.enable_active_high ? HIGH : LOW);
+    /* Publish ARMED only after the watchdog and output policy are ready. */
+    g_phase = HW_ARMED;
+    interrupts();
+}
+
+void axis_hw_clear_run(void) {
+    noInterrupts();
+    axis_hw_set_idle_outputs();
+    g_phase = HW_IDLE;
+    g_fault_reason = FAULT_NONE;
+    g_fault_tick = 0;
+    interrupts();
 }
 
 void axis_hw_schedule_start(uint64_t command_start_tick, uint64_t capture_start_tick) {
@@ -430,6 +501,9 @@ void axis_hw_schedule_start(uint64_t command_start_tick, uint64_t capture_start_
         + g_cfg.capture_post_roll_ticks;
     g_cur_interval = 0xFFFFFFFFu;
     g_have_prev_direction = false;
+    g_next_servo_tick = command_start_tick;
+    g_servo_initialized = false;
+    g_servo_effort = g_servo_reference = 0;
     g_transitions_total = 0;
     g_transitions_emitted = 0;
 
@@ -485,8 +559,7 @@ void axis_hw_get_status(axis_status_t *out) {
     for (uint32_t s = 0; s < NUM_CAPTURE_STREAMS; s++) {
         capture_stream_t *cs = capstream_instance(s);
         out->captured_count[s] = cs->count;
-        bool enabled = (s < NUM_ENCODERS) ? (g_cfg_valid && g_cfg.encoder_enabled[s])
-                                           : (g_cfg_valid && g_cfg.analog_enabled);
+        bool enabled = g_cfg_valid && axis_stream_enabled(&g_cfg, s);
         if (cs->overflowed) complete = false;
         if (enabled && !(phase == HW_DONE || phase == HW_FAULT)) complete = false;
     }

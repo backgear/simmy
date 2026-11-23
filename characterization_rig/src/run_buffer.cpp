@@ -81,100 +81,94 @@ void cmdbuf_hash_canonical(const command_buffer_t *cb, uint8_t out_digest[32]) {
 
 /* ------------------------- capture streams ------------------------- */
 
-void capstream_reset(capture_stream_t *cs, uint32_t capacity, uint64_t period_ticks, uint8_t channels) {
-    uint32_t max_cap = MAX_CAPTURE_SAMPLES / (channels ? channels : 1);
-    if (capacity > max_cap) capacity = max_cap;
-    memset(cs->samples, 0, sizeof(cs->samples));
+void capstream_reset(capture_stream_t *cs, uint64_t period_ticks, uint8_t channels,
+                      bool widen_hash_to_i64) {
+    memset(cs->staging, 0, sizeof(cs->staging));
+    cs->staging_fill[0] = cs->staging_fill[1] = 0;
+    cs->chunk_first_tick[0] = cs->chunk_first_tick[1] = 0;
+    cs->active = 0;
+    cs->pending[0] = cs->pending[1] = false;
+    cs->next_push_seq = 0;
     cs->count = 0;
-    cs->capacity = capacity;
     cs->first_sample_tick = 0;
     cs->period_ticks = period_ticks;
     cs->channels = channels;
+    cs->widen_hash_to_i64 = widen_hash_to_i64;
     cs->overflowed = false;
+    sha256_init(&cs->hash_ctx);
 }
 
 bool capstream_append(capture_stream_t *cs, const int32_t *values) {
-    if (cs->count >= cs->capacity) {
+    if (cs->overflowed) return false;
+    uint8_t half = cs->active;
+    if (cs->staging_fill[half] >= PUSH_CHUNK_SAMPLES) {
         cs->overflowed = true;
         return false;
     }
-    uint32_t base = cs->count * cs->channels;
-    for (uint8_t c = 0; c < cs->channels; c++) cs->samples[base + c] = values[c];
+    if (cs->staging_fill[half] == 0) {
+        cs->chunk_first_tick[half] = cs->first_sample_tick + (uint64_t)cs->count * cs->period_ticks;
+    }
+    uint32_t base = cs->staging_fill[half] * cs->channels;
+    for (uint8_t c = 0; c < cs->channels; c++) cs->staging[half][base + c] = values[c];
+    cs->staging_fill[half]++;
     cs->count++;
+
+    if (cs->staging_fill[half] == PUSH_CHUNK_SAMPLES) {
+        uint8_t other = (uint8_t)(1 - half);
+        if (cs->pending[other]) {
+            /* The main loop hasn't drained the other half yet -- the host
+             * (or USB) isn't keeping up. This is the real overflow now. */
+            cs->overflowed = true;
+            return false;
+        }
+        cs->pending[half] = true;
+        cs->active = other;
+        cs->staging_fill[other] = 0;
+    }
     return true;
 }
 
-void capstream_hash(const capture_stream_t *cs, bool widen_to_i64, uint8_t out_digest[32]) {
-    sha256_ctx ctx;
-    sha256_init(&ctx);
-    uint32_t total = cs->count * cs->channels;
-    if (widen_to_i64) {
-        uint8_t le[8];
-        for (uint32_t i = 0; i < total; i++) {
-            uint64_t u = (uint64_t)(int64_t)cs->samples[i];
-            for (int b = 0; b < 8; b++) le[b] = (uint8_t)(u >> (8 * b));
-            sha256_update(&ctx, le, 8);
-        }
-    } else {
-        uint8_t le[4];
-        for (uint32_t i = 0; i < total; i++) {
-            uint32_t u = (uint32_t)cs->samples[i];
-            for (int b = 0; b < 4; b++) le[b] = (uint8_t)(u >> (8 * b));
-            sha256_update(&ctx, le, 4);
-        }
-    }
-    sha256_final(&ctx, out_digest);
+void capstream_flush(capture_stream_t *cs) {
+    uint8_t half = cs->active;
+    if (cs->staging_fill[half] > 0 && !cs->pending[half]) cs->pending[half] = true;
 }
 
 static inline void put_u32le(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
-static inline void put_u64le(uint8_t *p, uint64_t v) {
-    for (int b = 0; b < 8; b++) p[b] = (uint8_t)(v >> (8 * b));
-}
 static inline void put_i32le(uint8_t *p, int32_t v) { put_u32le(p, (uint32_t)v); }
-static inline void put_i64le(uint8_t *p, int64_t v) { put_u64le(p, (uint64_t)v); }
+static inline void put_i64le(uint8_t *p, int64_t v) {
+    uint64_t u = (uint64_t)v;
+    for (int b = 0; b < 8; b++) p[b] = (uint8_t)(u >> (8 * b));
+}
 
-uint32_t capstream_encode_block(const capture_stream_t *cs, uint32_t block_index,
-                                 uint32_t block_len, uint8_t codec,
-                                 uint8_t *out, uint32_t out_cap) {
-    if (block_len == 0) return 0;
-    uint32_t start = block_index * block_len; /* caller picks a fixed block_len and derives block_index/start */
-    if (start >= cs->count) return 0;
-    uint32_t avail = cs->count - start;
-    uint32_t n = (avail < block_len) ? avail : block_len;
-    uint8_t ch = cs->channels;
-
+/* Encodes staging[half][0 .. n*channels) with the given codec, exactly
+ * the same wire shapes the old whole-buffer encoder produced. */
+static uint32_t encode_chunk(const int32_t *data, uint32_t n, uint8_t channels, uint8_t codec,
+                              uint8_t *out, uint32_t out_cap) {
     if (codec == 1) { /* raw_i64 */
-        uint32_t need = n * ch * 8;
+        uint32_t need = n * channels * 8;
         if (need > out_cap) return 0;
-        for (uint32_t i = 0; i < n * ch; i++) {
-            put_i64le(out + i * 8, (int64_t)cs->samples[start * ch + i]);
-        }
+        for (uint32_t i = 0; i < n * channels; i++) put_i64le(out + i * 8, (int64_t)data[i]);
         return need;
     }
     if (codec == 3) { /* raw_i32 */
-        uint32_t need = n * ch * 4;
+        uint32_t need = n * channels * 4;
         if (need > out_cap) return 0;
-        for (uint32_t i = 0; i < n * ch; i++) {
-            put_i32le(out + i * 4, cs->samples[start * ch + i]);
-        }
+        for (uint32_t i = 0; i < n * channels; i++) put_i32le(out + i * 4, data[i]);
         return need;
     }
     if (codec == 2) { /* delta_rle_i32, single-channel streams only in this build */
-        if (ch != 1) return 0;
+        if (channels != 1 || n == 0) return 0;
         uint32_t off = 0;
         if (8 > out_cap) return 0;
-        put_i64le(out, (int64_t)cs->samples[start]);
+        put_i64le(out, (int64_t)data[0]);
         off += 8;
         uint32_t i = 1;
         while (i < n) {
-            int32_t delta = cs->samples[start + i] - cs->samples[start + i - 1];
+            int32_t delta = data[i] - data[i - 1];
             uint32_t repeat = 1;
-            while (i + repeat < n &&
-                   (cs->samples[start + i + repeat] - cs->samples[start + i + repeat - 1]) == delta) {
-                repeat++;
-            }
+            while (i + repeat < n && (data[i + repeat] - data[i + repeat - 1]) == delta) repeat++;
             if (off + 4 + 4 > out_cap) return 0;
             put_u32le(out + off, repeat); off += 4;
             put_i32le(out + off, delta); off += 4;
@@ -183,4 +177,53 @@ uint32_t capstream_encode_block(const capture_stream_t *cs, uint32_t block_index
         return off;
     }
     return 0;
+}
+
+bool capstream_drain(capture_stream_t *cs, uint8_t codec, uint8_t *body, uint32_t body_cap,
+                      uint32_t *out_sample_count, uint64_t *out_first_tick,
+                      uint32_t *out_seq, uint32_t *out_body_len) {
+    /* Flush can leave both halves pending. Half index is not chronological:
+     * the final short half 0 can follow a full, older half 1. */
+    bool pending0 = cs->pending[0], pending1 = cs->pending[1];
+    if (!pending0 && !pending1) return false;
+    uint8_t half = !pending0 ? 1 : !pending1 ? 0 :
+        (cs->chunk_first_tick[1] < cs->chunk_first_tick[0] ? 1 : 0);
+    {
+        uint32_t n = cs->staging_fill[half];
+        const int32_t *data = cs->staging[half];
+
+        /* Hash commits to the uncompressed raw values regardless of which
+         * wire codec this chunk happens to use. */
+        uint32_t total = n * cs->channels;
+        uint8_t le[8];
+        if (cs->widen_hash_to_i64) {
+            for (uint32_t i = 0; i < total; i++) {
+                uint64_t u = (uint64_t)(int64_t)data[i];
+                for (int b = 0; b < 8; b++) le[b] = (uint8_t)(u >> (8 * b));
+                sha256_update(&cs->hash_ctx, le, 8);
+            }
+        } else {
+            for (uint32_t i = 0; i < total; i++) {
+                uint32_t u = (uint32_t)data[i];
+                for (int b = 0; b < 4; b++) le[b] = (uint8_t)(u >> (8 * b));
+                sha256_update(&cs->hash_ctx, le, 4);
+            }
+        }
+
+        uint32_t encoded = encode_chunk(data, n, cs->channels, codec, body, body_cap);
+        if (encoded == 0 && n > 0) return false; /* caller's body_cap was sized wrong; don't lose the chunk */
+
+        *out_sample_count = n;
+        *out_first_tick = cs->chunk_first_tick[half];
+        *out_seq = cs->next_push_seq++;
+        *out_body_len = encoded;
+        cs->staging_fill[half] = 0;
+        cs->pending[half] = false;
+        return true;
+    }
+}
+
+void capstream_final_hash(const capture_stream_t *cs, uint8_t out_digest[32]) {
+    sha256_ctx copy = cs->hash_ctx; /* plain POD struct: finalize a copy, keep the live one running */
+    sha256_final(&copy, out_digest);
 }

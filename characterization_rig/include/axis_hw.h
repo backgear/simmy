@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "axis_config.h"
+#include "axis_pid.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,7 +17,11 @@ typedef enum {
      * code for that interval (zero-order hold at the interval's start),
      * not a cumulative digital count -- see axis_hw.cpp. */
     OUTPUT_ANALOG_PWM_RC = 2,
+    OUTPUT_ANALOG_POSITION_SERVO = 3, /* references in encoder counts; live 1kHz Control.c */
 } output_mode_t;
+static inline bool axis_output_is_pwm(output_mode_t m) {
+    return m == OUTPUT_ANALOG_PWM_RC || m == OUTPUT_ANALOG_POSITION_SERVO;
+}
 
 typedef enum {
     CONN_SUPERVISED = 0,
@@ -62,7 +67,12 @@ typedef struct {
     uint64_t arming_timeout_ticks;
     connection_policy_t connection_policy;
     safe_action_t safe_action;
+    axis_pid_config_t servo;
 } run_config_t;
+static inline bool axis_stream_enabled(const run_config_t *c, uint32_t s) {
+    return s < NUM_ENCODERS ? c->encoder_enabled[s] :
+        (c->analog_enabled || c->output_mode == OUTPUT_ANALOG_POSITION_SERVO);
+}
 
 typedef enum {
     FAULT_NONE = 0,
@@ -108,6 +118,9 @@ void axis_hw_schedule_start(uint64_t command_start_tick, uint64_t capture_start_
 
 /* Immediately stops generation/capture and applies cfg->safe_action. */
 void axis_hw_abort(fault_reason_t reason);
+
+/* Release terminal/armed hardware state with outputs disabled. */
+void axis_hw_clear_run(void);
 
 /* Renews the watchdog lease (KEEPALIVE). */
 void axis_hw_feed_watchdog(void);

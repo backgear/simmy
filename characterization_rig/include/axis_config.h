@@ -7,10 +7,12 @@
  * enforces them. Tune to taste; everything downstream reads these symbols
  * rather than hardcoding numbers again.
  *
- * RAM budget (20KB total on C8): command buffer + 3 capture streams are
- * the big static allocations, sized to leave headroom for the USB CDC
- * stack, ArduinoJson's working set (bounded by MAX_PAYLOAD below) and the
- * call stack.
+ * RAM budget (20KB total on C8): the command buffer is the one big
+ * static allocation left; capture no longer buffers a whole run at all
+ * (see run_buffer.h) -- each capture stream costs a fixed, tiny double
+ * buffer instead, independent of run length, leaving headroom for the
+ * USB CDC stack, ArduinoJson's working set (bounded by MAX_PAYLOAD
+ * below) and the call stack.
  */
 
 /* ---- Wire framing ----
@@ -31,16 +33,22 @@
 #define NUM_ENCODERS            2u      /* TIM2/TIM4 hardware encoder mode -- TIM3 is the PWM output below */
 #define NUM_ANALOG_CHANNELS     2u      /* ADC1_IN4 (PA4), ADC1_IN5 (PA5) */
 #define NUM_CAPTURE_STREAMS     (NUM_ENCODERS + 1u) /* one stream per encoder + one multi-channel analog stream */
-#define MAX_CAPTURE_SAMPLES     300u    /* per stream (words, so /channels for analog); ~1.2KB each as int32_t */
+/* Samples per pushed DATA chunk, per stream -- NOT a capture-length cap.
+ * Capture is unsolicited-push streamed (see run_buffer.h); each stream's
+ * only on-device storage is 2 of these chunks (ping-pong), so run length
+ * is bounded by host/USB drain rate and run duration, not SRAM. */
+#define PUSH_CHUNK_SAMPLES      32u
 
 #define MAX_SEGMENTS            8u
 
 /* ---- Tick base ----
  * TIM1 runs a 1 MHz tick and fires its update ISR every TICKS_PER_SERVICE
- * ticks. That period is this firmware's quantization and worst-case timing
- * error, reported honestly in HELLO rather than assumed. */
+ * ticks. The original 5 us ISR starved USB while ARMED on the actual F103.
+ * Use a conservative service rate; HELLO reports its timing quantization.
+ * Physical acquisition aperture/jitter still require independent validation. */
 #define TICK_HZ                 1000000ull
-#define TICKS_PER_SERVICE       5u       /* 5 us -> 200 kHz service ISR */
+#define TICKS_PER_SERVICE       25u      /* 25 us -> 40 kHz service ISR */
+#define ANALOG_MIN_PERIOD_TICKS 250u
 
 /* ---- Pin map ----
  * TIM2/TIM4 CH1/CH2 pairs are reserved entirely for hardware quadrature
@@ -55,10 +63,10 @@
 #define PIN_ENABLE              PA10  /* drive enable, polarity from manifest */
 #define PIN_ESTOP                PB0  /* active-low to GND, pulled up; optional */
 
-#define PIN_ENC1_A               PA0   /* TIM2_CH1 */
-#define PIN_ENC1_B               PA1   /* TIM2_CH2 */
-#define PIN_ENC2_A               PB6   /* TIM4_CH1 */
-#define PIN_ENC2_B               PB7   /* TIM4_CH2 */
+#define PIN_ENC1_A               PB6   /* encoder 0, TIM4_CH1 */
+#define PIN_ENC1_B               PB7   /* encoder 0, TIM4_CH2 */
+#define PIN_ENC2_A               PA0   /* encoder 1, TIM2_CH1 */
+#define PIN_ENC2_B               PA1   /* encoder 1, TIM2_CH2 */
 
 #define PIN_ANALOG0              PA4   /* ADC1_IN4 */
 #define PIN_ANALOG1              PA5   /* ADC1_IN5 */

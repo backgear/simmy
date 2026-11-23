@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/backgear/analog-servo",
+  "checkout_head": "601a3a44c9766a408c22f88329ac765761dda355",
+  "note": "Exact working-tree source snapshots; hashes authoritative even if checkout is dirty. No controller algorithm changes.",
+  "sha256": {
+    "Control.c": "01232a1a2cff3b3f50524fc61f159b884204b7cf2b1342af910a5693098b9a85",
+    "Control.h": "4d916d393faec9dd0df6132e34b43829b6ede6d7f8354de0af164ddc904f89da",
+    "Output.h": "ed93ae61a86d5b2cadc15451f5c3a6cae2616bee6541c01b15c946326bd74963",
+    "LICENSE": "ec15b9448fe21eef84c5ae80436a39556eb48583d468bc1094a0c8460b04b3e1"
+  }
+}
