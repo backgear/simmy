@@ -19,7 +19,8 @@ connected by compliant (spring + damper + backlash) couplings, a
 composable "analog signal chain" standing in for a real DAC/amplifier
 signal path, and a bidirectional pulse source for step/dir-style
 position commands -- plus brushed DC, permanent-magnet/BLDC, voltage-driven
-induction, and current-driven stepper motor models. No opinion on control
+induction, current-driven stepper, and linear electromagnetic actuator
+(reluctance solenoid + voice coil) motor models. No opinion on control
 algorithms: you drive it with a plain function pointer, which may be a
 three-line demo P loop or a real production control cascade linked in
 from somewhere else.
@@ -47,14 +48,16 @@ to your own machine.
   real production control cascade are both ordinary implementations of
   the same function-pointer typedef -- see
   [driving simmy with your own controller](integration.md).
-- **Four motor families, one mechanical/analog core.** A single-winding
+- **Five motor families, one mechanical/analog core.** A single-winding
   [brushed DC](motors/dc.md) motor (no commutation, no drive clock, just
   Kirchhoff's voltage law); [BLDC/permanent-magnet](motors/bldc.md)
   models with explicit faults and heat accounting; a voltage-driven
   [3-phase induction machine](motors/induction.md), drivable by open-loop
   V/Hz or either of two FOC controllers (an ideal flux benchmark and an
-  encoder-assisted indirect estimator); and a current-driven two-phase
-  [stepper](motors/stepper.md) -- roughly simplest to most complex.
+  encoder-assisted indirect estimator); a current-driven two-phase
+  [stepper](motors/stepper.md); and [linear electromagnetic
+  actuators](motors/solenoid.md) -- an attraction-only reluctance solenoid
+  and a bidirectional voice coil -- roughly simplest to most complex.
 - **C compiler + libm only.** No Python, no third-party JSON library for
   the core library and tests; plotting examples are optional.
 
@@ -63,7 +66,7 @@ to your own machine.
 | If you want to... | See |
 |---|---|
 | Build it and run a minimal example | [Build](build.md) |
-| Pick sample parameters for a motor | [Brushed DC](motors/dc.md), [BLDC](motors/bldc.md), [Induction (3-phase)](motors/induction.md), [Stepper](motors/stepper.md) |
+| Pick sample parameters for a motor | [Brushed DC](motors/dc.md), [BLDC](motors/bldc.md), [Induction (3-phase)](motors/induction.md), [Stepper](motors/stepper.md), [Solenoid/linear actuators](motors/solenoid.md) |
 | Understand the fixed clock rates in the examples | [Loop frequencies](loop-frequencies.md) |
 | Wire in your own controller | [Driving simmy with your own controller](integration.md) |
 | Know what's deliberately out of scope | [Scope and non-goals](scope.md) |

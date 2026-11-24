@@ -3,7 +3,7 @@ CFLAGS ?= -std=gnu11 -Wall -Wextra -O2 -Iinclude -Isrc
 LDLIBS := -lm
 
 BUILD := build
-LIB_SRCS := src/simmy.c src/simmy_induction.c src/simmy_bldc.c src/simmy_json.c src/simmy_config.c
+LIB_SRCS := src/simmy.c src/simmy_induction.c src/simmy_bldc.c src/simmy_solenoid.c src/simmy_json.c src/simmy_config.c
 LIB_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRCS))
 LIB := $(BUILD)/libsimmy.a
 
@@ -16,7 +16,7 @@ all: lib test examples
 
 lib: $(LIB)
 
-$(BUILD)/%.o: src/%.c include/simmy.h include/simmy_bldc.h src/simmy_json.h
+$(BUILD)/%.o: src/%.c include/simmy.h include/simmy_bldc.h include/simmy_solenoid.h src/simmy_json.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -44,6 +44,10 @@ test: $(LIB)
 	$(BUILD)/test_bldc
 	$(CC) $(CFLAGS) tests/test_bldc_moves.c $(LIB) $(LDLIBS) -o $(BUILD)/test_bldc_moves
 	$(BUILD)/test_bldc_moves
+	$(CC) $(CFLAGS) tests/test_solenoid.c $(LIB) $(LDLIBS) -o $(BUILD)/test_solenoid
+	$(BUILD)/test_solenoid
+	$(CC) $(CFLAGS) tests/test_voicecoil_pid.c $(LIB) $(LDLIBS) -o $(BUILD)/test_voicecoil_pid
+	$(BUILD)/test_voicecoil_pid
 
 # Optional Python stdlib tooling tests; not a dependency of the C-only suite.
 test-tools:
@@ -64,6 +68,8 @@ examples: $(LIB)
 	$(CC) $(CFLAGS) examples/bldc_faults.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_faults
 	$(CC) $(CFLAGS) examples/bldc_equivalence.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_equivalence
 	$(CC) $(CFLAGS) examples/bldc_circulation.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_circulation
+	$(CC) $(CFLAGS) examples/solenoid_actuators.c $(LIB) $(LDLIBS) -o $(BUILD)/solenoid_actuators
+	$(CC) $(CFLAGS) examples/voicecoil_pid.c $(LIB) $(LDLIBS) -o $(BUILD)/voicecoil_pid
 	@echo "Built examples in $(BUILD)/ -- run each from the repo root"
 
 # Optional: only builds when the analog-servo sibling repo is present.

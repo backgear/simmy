@@ -52,6 +52,7 @@ nav:
       - BLDC / permanent-magnet: motors/bldc.md
       - Induction (3-phase): motors/induction.md
       - Stepper: motors/stepper.md
+      - Solenoid / linear actuators: motors/solenoid.md
   - Mechanical chain: mechanical-chain.md
   - Couplings:
       - Overview: couplings/index.md

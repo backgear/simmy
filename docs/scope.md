@@ -127,9 +127,25 @@ inductance, no chopper, no voltage limit -- give it a current and it
 returns torque. That means it cannot predict the high-speed torque
 envelope, where those effects start to matter.
 
+**The linear electromagnetic actuator models** (reluctance solenoid and
+voice coil, [solenoid/linear actuators](motors/solenoid.md)) are each a
+single coil driving a single moving armature or magnet -- not a stack of
+magnet segments interacting with each other, which is a structurally
+different (and not yet modeled) multi-body problem. The reluctance
+model's saturation is gap-dependent only, not flux/current-dependent,
+and there's no eddy-current/core loss or hysteresis. The voice-coil model
+assumes one long magnet (axial length much greater than the coil's
+travel), so its force constant is a single position-independent number,
+not a function of stroke position. Neither model gives the body chain a
+mechanical hard stop -- `minGapMeters` only bounds the electrical
+calculation, so an energized reluctance actuator run past its real
+travel will pull straight through where a real stop would sit; see
+[Endstops and hard limits](#what-a-few-specific-models-assume) above,
+the same gap these motors inherit from the mechanical chain.
+
 ## Determinism
 
-No part of the physics -- body integration, any of the four motor
+No part of the physics -- body integration, any of the five motor
 models -- calls `rand()`, reads the clock, or touches any other source
 of entropy. The one place simmy has pseudo-randomness at all is two
 named, optional features: the analog chain's `NOISE` stage and

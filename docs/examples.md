@@ -171,6 +171,27 @@ Only plotting requires Python, NumPy and Matplotlib. See
 [the stepper motor page](motors/stepper.md) for the sample motor and
 measured results.
 
+## Solenoid / linear actuators
+
+```sh
+make test examples
+build/solenoid_actuators > build/solenoid_actuators.csv
+python3 examples/plot_solenoid_actuators.py build/solenoid_actuators.csv docs/plots
+
+# Closed-loop PID lift/descend against gravity (voice coil only -- see
+# examples/voicecoil_pid_experiment.h):
+build/voicecoil_pid > build/voicecoil_pid.csv
+python3 examples/plot_voicecoil_pid.py build/voicecoil_pid.csv docs/plots
+```
+
+Only plotting requires Python, NumPy and Matplotlib. `solenoid_actuators`
+runs both sample motors open-loop -- an iron-core reluctance solenoid
+pulling in under constant voltage, and a voice coil pushed and pulled by
+a sine drive. `voicecoil_pid` closes the loop with a genuine PID on a
+vertical voice-coil actuator fighting gravity, with no mechanical return
+spring. See [the solenoid/linear actuator page](motors/solenoid.md) for
+the sample motors and measured results.
+
 ## Single-axis identification prototype
 
 See [axis identification](axis_identification.md) for a minimal sensor

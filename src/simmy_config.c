@@ -410,3 +410,64 @@ int SimmyDcParamsFromJsonFile(const char *path, SimmyDcParams *out,
   SimmyJsonFree(root);
   return 0;
 }
+
+int SimmyReluctanceParamsFromJsonFile(const char *path, SimmyReluctanceParams *out,
+                                       char *errMsg, size_t errMsgLen) {
+  char *text = ReadWholeFile(path, errMsg, errMsgLen);
+  if (!text) return 1;
+  SimmyJsonValue *root = SimmyJsonParse(text, errMsg, errMsgLen);
+  free(text);
+  if (!root) return 1;
+
+  SimmyReluctanceParams zero = {0};
+  *out = zero;
+  const SimmyJsonValue *obj = SimmyJsonObjectGet(root, "reluctanceMotor");
+  out->resistance = SimmyJsonNumber(SimmyJsonObjectGet(obj, "resistance"), 0.0);
+  out->minInductance = SimmyJsonNumber(SimmyJsonObjectGet(obj, "minInductance"), 0.0);
+  out->maxInductance = SimmyJsonNumber(SimmyJsonObjectGet(obj, "maxInductance"), 0.0);
+  out->shapeMeters = SimmyJsonNumber(SimmyJsonObjectGet(obj, "shapeMeters"), 0.0);
+  out->saturationSharpness = SimmyJsonNumber(SimmyJsonObjectGet(obj, "saturationSharpness"), 0.0);
+  out->minGapMeters = SimmyJsonNumber(SimmyJsonObjectGet(obj, "minGapMeters"), 0.0);
+
+  if (!SimmyReluctanceParamsValid(out)) {
+    if (errMsg && errMsgLen) {
+      snprintf(errMsg, errMsgLen, "reluctanceMotor parameters invalid: need nonnegative "
+               "resistance, positive minInductance, maxInductance > minInductance, and "
+               "positive shapeMeters/saturationSharpness/minGapMeters (all required, no "
+               "default)");
+    }
+    SimmyJsonFree(root);
+    return 1;
+  }
+
+  SimmyJsonFree(root);
+  return 0;
+}
+
+int SimmyVoiceCoilParamsFromJsonFile(const char *path, SimmyVoiceCoilParams *out,
+                                      char *errMsg, size_t errMsgLen) {
+  char *text = ReadWholeFile(path, errMsg, errMsgLen);
+  if (!text) return 1;
+  SimmyJsonValue *root = SimmyJsonParse(text, errMsg, errMsgLen);
+  free(text);
+  if (!root) return 1;
+
+  SimmyVoiceCoilParams zero = {0};
+  *out = zero;
+  const SimmyJsonValue *obj = SimmyJsonObjectGet(root, "voiceCoilMotor");
+  out->resistance = SimmyJsonNumber(SimmyJsonObjectGet(obj, "resistance"), 0.0);
+  out->inductance = SimmyJsonNumber(SimmyJsonObjectGet(obj, "inductance"), 0.0);
+  out->forceConstant = SimmyJsonNumber(SimmyJsonObjectGet(obj, "forceConstant"), 0.0);
+
+  if (!SimmyVoiceCoilParamsValid(out)) {
+    if (errMsg && errMsgLen) {
+      snprintf(errMsg, errMsgLen, "voiceCoilMotor parameters invalid: need nonnegative "
+               "resistance/forceConstant and positive inductance (required, no default)");
+    }
+    SimmyJsonFree(root);
+    return 1;
+  }
+
+  SimmyJsonFree(root);
+  return 0;
+}
