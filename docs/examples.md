@@ -147,6 +147,43 @@ build/induction_ifoc --steps 8 > build/induction_ifoc_fine.csv
 See [the induction motor page](motors/induction.md) for the sample motor,
 the three drive modes, and measured results.
 
+## PMSM (continuous-angle FOC, no Hall sensors)
+
+```sh
+make test examples
+build/pmsm_foc > build/pmsm_foc.csv
+python3 examples/plot_pmsm_foc.py build/pmsm_foc.csv docs/plots
+```
+
+`examples/pmsm_foc.h` / `examples/pmsm_foc.c` are a current+speed PI FOC
+controller on simmy's existing sine-wound reduced PM plant
+(`SimmyPmParams`/`SimmyPmState`/`SimmyPmStep`) -- the same Park/Clarke +
+PI/anti-windup shape as the induction FOC pair above (sharing
+`examples/foc_transforms.h`), commutating from a plain sensed electrical
+angle rather than true/estimated rotor flux, since a permanent magnet's
+flux doesn't need estimating. See [the BLDC/PM motor
+page](motors/bldc.md#continuous-angle-foc-no-hall-sensors) for why this
+exists and what it deliberately does not add.
+
+## PMSM angle-lock (plant validation)
+
+```sh
+make test examples
+build/pmsm_angle_lock > build/pmsm_angle_lock.csv
+python3 examples/plot_pmsm_angle_lock.py build/pmsm_angle_lock.csv docs/plots
+```
+
+`examples/pmsm_angle_lock.h` / `examples/pmsm_angle_lock.c` have no
+controller and no feedback at all: a FIXED stator voltage vector pulls
+the PM rotor into alignment like a magnetic pendulum, swept across rotor
+inertia spanning two orders of magnitude. The point is to validate
+`SimmyPmStep` itself -- same restoring torque and electrical damping
+every run, only `J` differs, so the measured settling should show the
+textbook period ~ `sqrt(J)` scaling and a common equilibrium. See [the
+BLDC/PM motor
+page](motors/bldc.md#validating-the-plant-forced-alignment-under-a-fixed-voltage-vector)
+for the derivation and measured results.
+
 ## Stepper
 
 ```sh

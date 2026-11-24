@@ -6,9 +6,8 @@
  * supplied flux frame: true in the oracle, estimated in indirect FOC.
  * Measured stator current remains plant output; no physical state clamp. */
 #include "simmy.h"
+#include "foc_transforms.h"
 #include <math.h>
-
-#define FOC_PI 3.14159265358979323846
 
 typedef struct {
   double polePairs, lm, lr, leakage, rotorTimeConstant;
@@ -23,22 +22,6 @@ typedef struct {
   double torqueRequest, voltage[2], fluxMagnitude;
   int fluxReady, voltageLimited, currentLimited;
 } FocState;
-
-static inline void FocPark(const double ab[2], double angle, double dq[2]) {
-  double c = cos(angle), s = sin(angle);
-  dq[0] = c*ab[0]+s*ab[1];
-  dq[1] = -s*ab[0]+c*ab[1];
-}
-
-static inline void FocInversePark(const double dq[2], double angle, double ab[2]) {
-  double c = cos(angle), s = sin(angle);
-  ab[0] = c*dq[0]-s*dq[1];
-  ab[1] = s*dq[0]+c*dq[1];
-}
-
-static inline double FocClamp(double value, double limit) {
-  return fmax(-limit, fmin(limit, value));
-}
 
 static inline FocParams FocDefaultParams(const SimmyInductionParams *motor, double voltageLimit) {
   double lr = motor->magnetizingInductance + motor->rotorLeakageInductance;

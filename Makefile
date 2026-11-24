@@ -40,6 +40,10 @@ test: $(LIB)
 	$(BUILD)/test_induction_foc
 	$(CC) $(CFLAGS) tests/test_induction_ifoc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_induction_ifoc
 	$(BUILD)/test_induction_ifoc
+	$(CC) $(CFLAGS) tests/test_pmsm_foc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_pmsm_foc
+	$(BUILD)/test_pmsm_foc
+	$(CC) $(CFLAGS) tests/test_pmsm_angle_lock.c $(LIB) $(LDLIBS) -o $(BUILD)/test_pmsm_angle_lock
+	$(BUILD)/test_pmsm_angle_lock
 	$(CC) $(CFLAGS) tests/test_bldc.c $(LIB) $(LDLIBS) -o $(BUILD)/test_bldc
 	$(BUILD)/test_bldc
 	$(CC) $(CFLAGS) tests/test_bldc_moves.c $(LIB) $(LDLIBS) -o $(BUILD)/test_bldc_moves
@@ -61,6 +65,8 @@ examples: $(LIB)
 	$(CC) $(CFLAGS) examples/induction_vfd.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_vfd
 	$(CC) $(CFLAGS) examples/induction_foc.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_foc
 	$(CC) $(CFLAGS) examples/induction_ifoc.c $(LIB) $(LDLIBS) -o $(BUILD)/induction_ifoc
+	$(CC) $(CFLAGS) examples/pmsm_foc.c $(LIB) $(LDLIBS) -o $(BUILD)/pmsm_foc
+	$(CC) $(CFLAGS) examples/pmsm_angle_lock.c $(LIB) $(LDLIBS) -o $(BUILD)/pmsm_angle_lock
 	$(CC) $(CFLAGS) examples/bldc_faults.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_faults
 	$(CC) $(CFLAGS) examples/bldc_equivalence.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_equivalence
 	$(CC) $(CFLAGS) examples/bldc_circulation.c $(LIB) $(LDLIBS) -o $(BUILD)/bldc_circulation
