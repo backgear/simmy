@@ -143,3 +143,23 @@ and the magnetizing inductance are required (must be positive).
 `SimmyStepperCurrentParamsFromJsonFile` reads `stepperCurrentPath`.
 `electricalCyclesPerRev` is required; `detentCyclesPerRev` is required
 only once `detentAmplitude` is nonzero.
+
+```jsonc
+{
+  "reluctanceMotor": {
+    "resistance": 2.0, "minInductance": 0.0005, "maxInductance": 0.05,
+    "shapeMeters": 0.0005, "saturationSharpness": 2.0, "minGapMeters": 0.0002
+  },
+  "voiceCoilMotor": {
+    "resistance": 3.0, "inductance": 0.0006, "forceConstant": 1.2
+  }
+}
+```
+
+`SimmyReluctanceParamsFromJsonFile` reads `reluctanceMotor`, then runs the
+result through `SimmyReluctanceParamsValid` -- `minInductance`,
+`maxInductance` (`> minInductance`), `shapeMeters`, `saturationSharpness`,
+and `minGapMeters` are all required (no sane default for any of them).
+`SimmyVoiceCoilParamsFromJsonFile` reads `voiceCoilMotor`; `inductance` is
+required. See [the solenoid/linear actuator page](motors/solenoid.md) for
+what each field means physically.

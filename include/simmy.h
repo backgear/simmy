@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "simmy_bldc.h"
+#include "simmy_solenoid.h"
 
 /*
  * simmy -- a small mechatronics simulation library.
@@ -18,7 +19,9 @@
  * DAC/amplifier signal path, and a bidirectional pulse source for
  * step/dir-style position commands. Separate motor components model
  * two-phase stepper torque, an averaged voltage-driven induction machine,
- * and permanent-magnet winding/bridge circuits (including a reduced model).
+ * permanent-magnet winding/bridge circuits (including a reduced model),
+ * and linear electromagnetic actuators -- attraction-only reluctance
+ * solenoids and bidirectional voice-coil/moving-magnet actuators.
  *
  * Scope and non-goals:
  *   - This is a MECHANICAL + ANALOG-SIGNAL-PATH + SIMPLIFIED MOTOR simulator. It has no
@@ -282,6 +285,27 @@ void SimmyVfdCommandStep(SimmyVfdState *state, const SimmyVfdParams *params,
  * wrapped. Does NOT advance the frequency ramp or command-update clock. */
 void SimmyVfdVoltageStep(SimmyVfdState *state, double dtSeconds, double voltage[2]);
 
+/* ==================== Linear electromagnetic actuators ================ */
+
+/* Convert linear SI units to the existing chain's count/force/tick units. */
+typedef struct {
+  double metersPerCount, forcePerNewton, tickSeconds; /* all finite and >0 */
+} SimmyLinearMount;
+
+/* Requires a valid chain and mount. Body-0 position gives air gap;
+ * velocity gives gap velocity. The electrical gap bound is not a body stop.
+ * Returns 0 without changing either state if SimmyReluctanceStep rejects
+ * its input. Otherwise steps the motor once and advances the chain by
+ * dtSeconds/mount->tickSeconds ticks, with the resulting force held fixed. */
+int SimmyReluctanceChainStep(SimmyChainState *chainState, const SimmyChainParams *chain,
+                             SimmyReluctanceState *motorState, const SimmyReluctanceParams *motor,
+                             const SimmyLinearMount *mount, double voltage, double dtSeconds);
+/* Couples to body 0: body-0 velocity gives the coil/magnet's relative
+ * velocity. Same failure convention as SimmyReluctanceChainStep. */
+int SimmyVoiceCoilChainStep(SimmyChainState *chainState, const SimmyChainParams *chain,
+                            SimmyVoiceCoilState *motorState, const SimmyVoiceCoilParams *motor,
+                            const SimmyLinearMount *mount, double voltage, double dtSeconds);
+
 /* ==================== Analog signal chain ============================ */
 
 /* A composable "train of analog type values" standing in for a real
@@ -389,5 +413,14 @@ int SimmyPmParamsFromJsonFile(const char *path, SimmyPmParams *out,
 /* Reads "dcMotor" (brushed DC); validated with SimmyDcParamsValid. */
 int SimmyDcParamsFromJsonFile(const char *path, SimmyDcParams *out,
                                char *errMsg, size_t errMsgLen);
+/* Reads "reluctanceMotor"; validated with SimmyReluctanceParamsValid.
+ * minInductance, maxInductance (>minInductance), shapeMeters,
+ * saturationSharpness, and minGapMeters are all required -- none has a
+ * sane default. */
+int SimmyReluctanceParamsFromJsonFile(const char *path, SimmyReluctanceParams *out,
+                                       char *errMsg, size_t errMsgLen);
+/* Reads "voiceCoilMotor"; validated with SimmyVoiceCoilParamsValid. */
+int SimmyVoiceCoilParamsFromJsonFile(const char *path, SimmyVoiceCoilParams *out,
+                                      char *errMsg, size_t errMsgLen);
 
 #endif /* SIMMY_H */

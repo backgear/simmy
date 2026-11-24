@@ -21,7 +21,9 @@ signal path, and a bidirectional pulse source for step/dir-style
 position commands. It also includes a brushed DC motor, permanent-magnet/BLDC
 models with explicit winding/inverter faults and heat accounting, a
 voltage-driven 3-phase induction motor (open-loop V/Hz plus two FOC variants),
-and a current-driven two-phase stepper. Mechanical/analog coefficients
+a current-driven two-phase stepper, and linear electromagnetic actuators --
+attraction-only reluctance solenoids and bidirectional voice-coil/moving-magnet
+actuators. Mechanical/analog coefficients
 and every motor's physical parameters all load from JSON. No opinion on
 control algorithms -- you drive it with a plain function pointer, which
 may be a three-line demo P loop or a real production control cascade
@@ -55,8 +57,9 @@ closer to your own machine.
 - **No opinion on control algorithms.** A three-line demo P loop and a
   real production control cascade are both ordinary implementations of
   the same function-pointer typedef.
-- **Four motor families, one mechanical/analog core.** Brushed DC,
-  BLDC/permanent-magnet, 3-phase induction (V/Hz + FOC), and stepper --
+- **Five motor families, one mechanical/analog core.** Brushed DC,
+  BLDC/permanent-magnet, 3-phase induction (V/Hz + FOC), stepper, and
+  linear electromagnetic actuators (reluctance solenoid + voice coil) --
   roughly simplest to most complex.
 - **C compiler + libm only.** No Python, no third-party JSON library for
   the core library and tests; plotting examples are optional.
@@ -94,8 +97,9 @@ Built for Read the Docs; see `docs/` (`mkdocs serve` to browse locally):
 
 - Sample parameters and measured results for the
   [brushed DC](docs/motors/dc.md), [BLDC](docs/motors/bldc.md),
-  [3-phase induction](docs/motors/induction.md), and
-  [stepper](docs/motors/stepper.md) motor models.
+  [3-phase induction](docs/motors/induction.md),
+  [stepper](docs/motors/stepper.md), and
+  [solenoid/linear actuator](docs/motors/solenoid.md) motor models.
 - The [loop frequencies](docs/loop-frequencies.md) every example fixes
   (mechanical tick, drive/current/PWM/commutation clocks, plant
   integration rate).
