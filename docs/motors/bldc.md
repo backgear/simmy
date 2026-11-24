@@ -113,6 +113,74 @@ a local electrical-step benchmark.
 
 See [examples](../examples.md#bldc) for reproduction commands.
 
+## Continuous-angle FOC, no Hall sensors
+
+`examples/pmsm_foc.h` / `examples/pmsm_foc.c` is a current+speed PI FOC
+controller on the sine-wound reduced model above (`SimmyPmStep`), built
+for one purpose: giving an **external** no-Hall, FOC-commutated 3-phase
+servo amplifier -- the kind of two-phase command/feedback drive AMC's
+SX25A series is shaped like -- something to test its own firmware
+against, the same way
+[`docs/axis_controller_development.md`](../axis_controller_development.md)
+already lets a real axis controller tune against a simulated motor.
+
+A no-Hall amp like that has no six-step Hall-table commutation to speak
+of; it commutates continuously from whatever two-phase sensor (resolver,
+absolute encoder, ...) it reads instead. simmy already models that
+correctly: `SimmyBldcSixStep`'s `sensedElectricalAngle` and
+`SimmyPmStep`'s `angle` are both plain caller-supplied sensed/calibrated
+electrical or mechanical angle, never a motor-state pointer or an
+internal Hall emulation. The FOC example above leans on exactly that --
+it is deliberately **not** a Hall-table model, and simmy does not have
+one anywhere: that is the one commutation style this library does not
+and will not simulate. It is also not sensorless/back-EMF angle
+estimation -- the controller always receives a sensed angle from the
+caller, optionally run through a small, explicitly bounded resolver
+stand-in (`PmResolverSensedAngle`) with static gain/offset error.
+
+See [examples](../examples.md#pmsm-continuous-angle-foc-no-hall-sensors)
+for reproduction commands.
+
+## Validating the plant: forced alignment under a fixed voltage vector
+
+The FOC controller above is layered on top of `SimmyPmStep`; it's worth
+checking that the **plant itself** behaves like a real PM motor and not
+just an arbitrary set of equations that happen to type-check.
+`examples/pmsm_angle_lock.h` / `examples/pmsm_angle_lock.c` do that with
+no controller and no feedback at all: hold the stator voltage vector at
+a FIXED electrical angle (never recomputed from the rotor's own angle)
+and let the permanent-magnet rotor swing into alignment with it -- the
+continuous-angle analogue of the forced-alignment/"beep-beep" torque
+pulse real no-Hall drives use at startup, and the same spirit as this
+project's own Hall-based commutation-learn pulse, just continuous
+instead of six-step.
+
+Worked out from the plant's own equations, this is an ordinary damped
+pendulum: restoring torque `1.5*Ke*Vm/R * sin(driveAngle-theta)`, plus an
+electrical damping term `Bem = 1.5*Ke^2/R` that falls straight out of the
+back-EMF/resistance relationship -- **no added mechanical friction is
+needed** to see realistic decaying oscillation. Linearized near
+equilibrium that's `J*x'' + Bem*x' + K*x = 0`, so sweeping only the rotor
+inertia `J` (same restoring torque and damping for every run) should
+reproduce the textbook result: period grows with `sqrt(J)`, and every run
+settles to the same equilibrium regardless of inertia.
+
+![Forced-alignment settling across four rotor inertias spanning two orders of magnitude](../plots/pmsm_angle_lock_settling.png)
+
+Four inertias spanning 125x (0.0002 to 0.025 kg m^2) released from 90
+electrical degrees off alignment all settle to the same equilibrium, and
+the measured period scales with `sqrt(J)` to within 15% -- closer for
+the larger inertias, where the mechanical period is large relative to
+this motor's own ~3.3 ms `L/R` electrical time constant, and measurably
+(but boundedly) less close for the smallest, where that approximation is
+most strained. `tests/test_pmsm_angle_lock.c` asserts exactly this: a
+common settled equilibrium for every inertia, periods that grow
+monotonically with `J`, and consecutive period ratios within 15% of
+`sqrt(J ratio)`.
+
+See [examples](../examples.md#pmsm-angle-lock-plant-validation) for
+reproduction commands.
+
 ## Scope
 
 - Linear magnetics: no saturation, no mutual inductance between windings.
