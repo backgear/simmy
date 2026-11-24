@@ -67,6 +67,84 @@ static int64_t s_enc_origin[NUM_ENCODERS];
 static TIM_HandleTypeDef s_pwm_htim3;
 static bool s_pwm_started = false;
 
+/* ---- analog input: ADC1 (master, PA4/channel 4) + ADC2 (slave,
+ * PA5/channel 5) in regular-simultaneous dual mode, continuous
+ * conversion, DMA1 Channel 1 continuously overwriting one 32-bit word
+ * (ADC2 result in bits 31:16, ADC1 in bits 15:0 -- see RM0008's
+ * "dual mode" chapter). This replaces two sequential blocking
+ * analogRead() calls with a single non-blocking word read: the
+ * conversion runs free, the service ISR just reads whatever the DMA
+ * last wrote, on its own schedule. Both channels are sampled at the
+ * same instant (that's the point of "simultaneous" -- no inter-channel
+ * skew), unlike reading them one after another. */
+static ADC_HandleTypeDef s_adc1, s_adc2;
+static DMA_HandleTypeDef s_dma_adc1;
+static volatile uint32_t s_adc_dma_word = 0;
+static bool s_adc_started = false;
+
+static void analog_adc_begin(void) {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Mode = GPIO_MODE_ANALOG;
+    gpio.Pin = GPIO_PIN_4 | GPIO_PIN_5;
+    HAL_GPIO_Init(GPIOA, &gpio);
+
+    __HAL_RCC_ADC1_CLK_ENABLE();
+    RCC->APB2ENR |= RCC_APB2ENR_ADC2EN; /* no __HAL_RCC_ADC2_CLK_ENABLE() in this HAL */
+    __HAL_RCC_DMA1_CLK_ENABLE();
+
+    s_adc1.Instance = ADC1;
+    s_adc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+    s_adc1.Init.ScanConvMode = DISABLE;        /* one regular channel per ADC */
+    s_adc1.Init.ContinuousConvMode = ENABLE;   /* free-running once started */
+    s_adc1.Init.NbrOfConversion = 1;
+    s_adc1.Init.DiscontinuousConvMode = DISABLE;
+    s_adc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+    HAL_ADC_Init(&s_adc1);
+
+    ADC_ChannelConfTypeDef ch = {0};
+    ch.Channel = ADC_CHANNEL_4; /* PA4 */
+    ch.Rank = ADC_REGULAR_RANK_1;
+    ch.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
+    HAL_ADC_ConfigChannel(&s_adc1, &ch);
+
+    s_adc2.Instance = ADC2;
+    s_adc2.Init = s_adc1.Init;
+    HAL_ADC_Init(&s_adc2);
+    ch.Channel = ADC_CHANNEL_5; /* PA5 */
+    HAL_ADC_ConfigChannel(&s_adc2, &ch);
+
+    ADC_MultiModeTypeDef multimode = {0};
+    multimode.Mode = ADC_DUALMODE_REGSIMULT;
+    HAL_ADCEx_MultiModeConfigChannel(&s_adc1, &multimode);
+
+    /* HAL_ADCEx_MultiModeStart_DMA() below only calls ADC_Enable() on the
+     * slave (sets ADON) -- it never sets the slave's own CR2_EXTTRIG, which
+     * gates whether ANY trigger (including the master's dual-mode-relayed
+     * one) actually starts a slave conversion. Without this, the slave's
+     * half of the combined data register never updates past its post-reset
+     * 0 -- confirmed on bench: swapping which physical channel is "master"
+     * vs. "slave" moved the live data with the MASTER role, not with
+     * either pin, proving the slave simply never converted. HAL_ADC_Start()
+     * sets EXTTRIG (see its own source) where ADC_Enable() alone does not;
+     * this is also why the HAL header note says the slave "can be enabled
+     * preliminarily using single-mode HAL_ADC_Start()" -- not optional. */
+    HAL_ADC_Start(&s_adc2);
+
+    s_dma_adc1.Instance = DMA1_Channel1;
+    s_dma_adc1.Init.Direction = DMA_PERIPH_TO_MEMORY;
+    s_dma_adc1.Init.PeriphInc = DMA_PINC_DISABLE;
+    s_dma_adc1.Init.MemInc = DMA_MINC_DISABLE;     /* depth-1: always the same word */
+    s_dma_adc1.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;
+    s_dma_adc1.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
+    s_dma_adc1.Init.Mode = DMA_CIRCULAR;
+    s_dma_adc1.Init.Priority = DMA_PRIORITY_HIGH;
+    HAL_DMA_Init(&s_dma_adc1);
+    __HAL_LINKDMA(&s_adc1, DMA_Handle, s_dma_adc1);
+
+    HAL_ADCEx_MultiModeStart_DMA(&s_adc1, (uint32_t *)&s_adc_dma_word, 1);
+}
+
 /* ---- run schedule state ---- */
 static uint64_t g_command_start_tick, g_capture_start_tick, g_run_end_tick;
 static uint32_t g_cur_interval = 0xFFFFFFFFu;
@@ -273,8 +351,12 @@ static void service_isr(void) {
                 if (g_cfg.output_mode == OUTPUT_ANALOG_POSITION_SERVO) {
                     vals[0] = g_servo_effort; vals[1] = g_servo_reference;
                 } else {
-                    vals[0] = analogRead(PIN_ANALOG0);
-                    if (NUM_ANALOG_CHANNELS > 1) vals[1] = analogRead(PIN_ANALOG1);
+                    /* Latest DMA-written word, read not waited-for: ADC1
+                     * (PA4) in the low half, ADC2 (PA5) in the high half,
+                     * both sampled at the same instant. */
+                    uint32_t combined = s_adc_dma_word;
+                    vals[0] = (int32_t)(combined & 0xFFFFu);
+                    if (NUM_ANALOG_CHANNELS > 1) vals[1] = (int32_t)((combined >> 16) & 0xFFFFu);
                 }
                 if (!capstream_append(cs, vals)) {
                     g_phase = HW_FAULT; g_fault_reason = FAULT_OVERFLOW; g_fault_tick = g_tick;
@@ -354,7 +436,6 @@ static void service_isr(void) {
 
 void axis_hw_init(void) {
     pinMode(PIN_ESTOP, INPUT_PULLUP);
-    analogReadResolution(12);
 
     axis_hw_set_idle_outputs();
 
@@ -462,6 +543,10 @@ void axis_hw_configure(const run_config_t *cfg) {
     } else if (axis_output_is_pwm(cfg->output_mode) && !s_pwm_started) {
         pwm_begin();
         s_pwm_started = true;
+    }
+    if (cfg->analog_enabled && !s_adc_started) {
+        analog_adc_begin();
+        s_adc_started = true;
     }
     axis_hw_set_idle_outputs();
 }
