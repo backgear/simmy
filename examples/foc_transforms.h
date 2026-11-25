@@ -22,6 +22,16 @@ static inline void FocInversePark(const double dq[2], double angle, double ab[2]
   ab[1] = s*dq[0]+c*dq[1];
 }
 
+/* Amplitude-invariant Clarke: stationary alpha/beta from a balanced
+ * three-phase triple, third phase inferred as c=-(a+b) (a Wye-connected
+ * winding set's currents/MMFs sum to zero), so only a/b are needed as
+ * inputs. No inverse-Clarke here -- nothing in this directory currently
+ * needs to go the other way; add one the same place if that changes. */
+static inline void FocClarke(double a, double b, double ab[2]) {
+  ab[0] = a;
+  ab[1] = (a+2.0*b)/sqrt(3.0);
+}
+
 static inline double FocClamp(double value, double limit) {
   return fmax(-limit, fmin(limit, value));
 }
