@@ -68,6 +68,7 @@ nav:
       - "Measured example: SM232AE / TQ10":
           - Controller development in simulation: axis_controller_development.md
           - Predicting recorded motion: axis_recorded_motion.md
+          - "Preset: free shaft, F103 closed loop": sm232ae_tq10_noload.md
       - Reference and evidence:
           - Recorder: axis_recorder.md
           - Device protocol: axis_device_protocol.md

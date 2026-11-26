@@ -120,6 +120,30 @@ static void test_friction_bump_is_localized_and_measurable(void) {
   assert(maxDiff > 0);   /* the bump measurably changed the trajectory */
 }
 
+/* Same force magnitude, motoring vs braking: with coulombPerForce the
+ * braking case decelerates faster than the motoring case accelerates. */
+static void test_coulomb_per_force_makes_braking_stronger_than_motoring(void) {
+  SimmyChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.bodyCount = 1;
+  params.bodies[0].inertia = 100.0;
+  params.bodies[0].coulombPerForce = 0.1;
+  SimmyChainState state;
+  SimmyChainInit(&state, &params);
+  state.bodies[0].velocity = 5.0;
+  SimmyChainStep(&state, &params, 1000.0);   /* motoring: (1000 - 100)/100 = +9 */
+  assert(fabs(state.bodies[0].velocity - 14.0) < 1e-9);
+  state.bodies[0].velocity = 5.0;
+  SimmyChainStep(&state, &params, -1000.0);  /* braking: (-1000 - 100)/100 = -11 */
+  assert(fabs(state.bodies[0].velocity - (-6.0)) < 1e-9);
+
+  /* 0 keeps the old behavior. */
+  params.bodies[0].coulombPerForce = 0.0;
+  state.bodies[0].velocity = 5.0;
+  SimmyChainStep(&state, &params, -1000.0);
+  assert(fabs(state.bodies[0].velocity - (-5.0)) < 1e-9);
+}
+
 static void test_ripple_is_periodic_in_position_not_time(void) {
   /* A body held at a FIXED position (huge inertia, tiny force) should see
    * the same ripple contribution every time it returns to the same
@@ -320,6 +344,52 @@ static void test_analog_chain_lag_responds_gradually(void) {
   assert(fabs(last - 100.0) < 1e-6);      /* settles to the input */
 }
 
+static void test_analog_chain_delay_shifts_whole_and_fractional_steps(void) {
+  SimmyAnalogChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.stageCount = 1;
+  params.stages[0] = (SimmyAnalogStageParams){.type = SIMMY_STAGE_DELAY, .param0 = 2.0};
+  SimmyAnalogChainState state;
+  SimmyAnalogChainInit(&state, 1);
+  /* Whole delay: a ramp 1,2,3,... comes out two calls late (zeros first). */
+  double out[6];
+  for (int i = 0; i < 6; i++) out[i] = SimmyAnalogChainStep(&state, &params, (double)(i + 1));
+  assert(out[0] == 0.0 && out[1] == 0.0);
+  for (int i = 2; i < 6; i++) assert(fabs(out[i] - (double)(i - 1)) < 1e-12);
+
+  /* Fractional delay interpolates linearly: 0.25 call on a ramp = input - 0.25. */
+  params.stages[0].param0 = 0.25;
+  SimmyAnalogChainInit(&state, 1);
+  double last = 0;
+  for (int i = 0; i < 10; i++) last = SimmyAnalogChainStep(&state, &params, (double)(i + 1));
+  assert(fabs(last - 9.75) < 1e-12);
+
+  /* Delay 0 is a pass-through. */
+  params.stages[0].param0 = 0.0;
+  SimmyAnalogChainInit(&state, 1);
+  assert(SimmyAnalogChainStep(&state, &params, 42.0) == 42.0);
+}
+
+static void test_analog_chain_slew_limits_rate_so_big_swings_take_longer(void) {
+  SimmyAnalogChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.stageCount = 1;
+  params.stages[0] = (SimmyAnalogStageParams){.type = SIMMY_STAGE_SLEW, .param0 = 10.0};
+  SimmyAnalogChainState state;
+  SimmyAnalogChainInit(&state, 1);
+  /* 0 -> 100 takes 10 calls ... */
+  int calls = 0;
+  while (SimmyAnalogChainStep(&state, &params, 100.0) < 100.0) calls++;
+  assert(calls == 9);   /* the 10th call reaches 100 */
+  /* ... and 100 -> -100 takes twice as many. A LAG stage would take the
+   * same time for both, which is the point of having SLEW. */
+  calls = 0;
+  while (SimmyAnalogChainStep(&state, &params, -100.0) > -100.0) calls++;
+  assert(calls == 19);
+  /* Small changes pass through unchanged. */
+  assert(SimmyAnalogChainStep(&state, &params, -95.0) == -95.0);
+}
+
 /* ---- bidirectional pulse source ----------------------------------------- */
 
 static void test_pulse_train_negative_rate_is_symmetric_to_positive(void) {
@@ -409,6 +479,28 @@ static void test_json_loads_two_body_config(void) {
   assert(analogParams.stageCount == 1);
   assert(analogParams.stages[0].type == SIMMY_STAGE_LAG);
   assert(analogParams.stages[0].param0 == 0.6);
+}
+
+static void test_json_loads_delay_slew_and_coulomb_per_force(void) {
+  char path[512];
+  TestTmpPath(path, sizeof(path), "simmy_test_delay_slew.json");
+  WriteFile(path, "{\"bodies\": [{\"inertia\": 10, \"coulombPerForce\": 0.05}],"
+                  " \"analogChain\": [{\"type\": \"delay\", \"param0\": 1.5},"
+                  " {\"type\": \"slew\", \"param0\": 300}]}");
+  SimmyChainParams params;
+  SimmyAnalogChainParams analog;
+  char err[256] = {0};
+  assert(SimmyChainParamsFromJsonFile(path, &params, err, sizeof(err)) == 0);
+  assert(params.bodies[0].coulombPerForce == 0.05);
+  assert(SimmyAnalogChainParamsFromJsonFile(path, &analog, err, sizeof(err)) == 0);
+  assert(analog.stageCount == 2);
+  assert(analog.stages[0].type == SIMMY_STAGE_DELAY && analog.stages[0].param0 == 1.5);
+  assert(analog.stages[1].type == SIMMY_STAGE_SLEW && analog.stages[1].param0 == 300.0);
+
+  WriteFile(path, "{\"analogChain\": [{\"type\": \"delay\", \"param0\": 31}]}");
+  assert(SimmyAnalogChainParamsFromJsonFile(path, &analog, err, sizeof(err)) != 0);
+  WriteFile(path, "{\"analogChain\": [{\"type\": \"slew\", \"param0\": 0}]}");
+  assert(SimmyAnalogChainParamsFromJsonFile(path, &analog, err, sizeof(err)) != 0);
 }
 
 static void test_json_reports_missing_file(void) {
@@ -610,6 +702,7 @@ int main(void) {
   test_single_body_stiction_holds_below_breakaway();
   test_single_body_stiction_does_not_chatter();
   test_friction_bump_is_localized_and_measurable();
+  test_coulomb_per_force_makes_braking_stronger_than_motoring();
   test_ripple_is_periodic_in_position_not_time();
   test_two_body_free_oscillation_decays();
   test_two_body_coupling_pulls_together_not_apart();
@@ -617,10 +710,13 @@ int main(void) {
   test_two_body_force_limit_caps_transmission();
   test_analog_chain_composes_stages_in_order();
   test_analog_chain_lag_responds_gradually();
+  test_analog_chain_delay_shifts_whole_and_fractional_steps();
+  test_analog_chain_slew_limits_rate_so_big_swings_take_longer();
   test_pulse_train_negative_rate_is_symmetric_to_positive();
   test_pulse_train_reversal_mid_run_is_clean();
   test_pulse_train_jitter_never_flips_sign();
   test_json_loads_two_body_config();
+  test_json_loads_delay_slew_and_coulomb_per_force();
   test_json_reports_missing_file();
   test_json_requires_positive_inertia();
   test_json_loads_stepper_motor();

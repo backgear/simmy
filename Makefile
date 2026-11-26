@@ -26,6 +26,8 @@ $(LIB): $(LIB_OBJS)
 test: $(LIB)
 	$(CC) $(CFLAGS) tests/test_simmy.c $(LIB) $(LDLIBS) -o $(BUILD)/test_simmy
 	$(BUILD)/test_simmy
+	$(CC) $(CFLAGS) tests/test_sm232ae_tq10_noload.c $(LIB) $(LDLIBS) -o $(BUILD)/test_sm232ae_tq10_noload
+	$(BUILD)/test_sm232ae_tq10_noload
 	$(CC) $(CFLAGS) tests/test_stepper.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper
 	$(BUILD)/test_stepper
 	$(CC) $(CFLAGS) tests/test_stepper_sweep.c $(LIB) $(LDLIBS) -o $(BUILD)/test_stepper_sweep

@@ -41,6 +41,7 @@ static void FillBodyParams(SimmyBodyParams *out, const SimmyJsonValue *obj) {
   out->frictionBumpCenter = SimmyJsonNumber(SimmyJsonObjectGet(obj, "frictionBumpCenter"), 0.0);
   out->frictionBumpHalfWidth = SimmyJsonNumber(SimmyJsonObjectGet(obj, "frictionBumpHalfWidth"), 0.0);
   out->frictionBumpExtra = SimmyJsonNumber(SimmyJsonObjectGet(obj, "frictionBumpExtra"), 0.0);
+  out->coulombPerForce = SimmyJsonNumber(SimmyJsonObjectGet(obj, "coulombPerForce"), 0.0);
 }
 
 static void FillCouplingParams(SimmyCouplingParams *out, const SimmyJsonValue *obj) {
@@ -103,6 +104,8 @@ static SimmyAnalogStageType StageTypeFromString(const char *s, int *ok) {
   if (strcmp(s, "quantize") == 0) return SIMMY_STAGE_QUANTIZE;
   if (strcmp(s, "lag") == 0) return SIMMY_STAGE_LAG;
   if (strcmp(s, "noise") == 0) return SIMMY_STAGE_NOISE;
+  if (strcmp(s, "delay") == 0) return SIMMY_STAGE_DELAY;
+  if (strcmp(s, "slew") == 0) return SIMMY_STAGE_SLEW;
   *ok = 0;
   return SIMMY_STAGE_GAIN;
 }
@@ -129,13 +132,24 @@ int SimmyAnalogChainParamsFromJsonFile(const char *path, SimmyAnalogChainParams 
     if (!ok) {
       if (errMsg && errMsgLen) {
         snprintf(errMsg, errMsgLen, "analogChain[%d].type must be one of "
-                 "gain|saturate|quantize|lag|noise", i);
+                 "gain|saturate|quantize|lag|noise|delay|slew", i);
       }
       SimmyJsonFree(root);
       return 1;
     }
     out->stages[i].param0 = SimmyJsonNumber(SimmyJsonObjectGet(stage, "param0"), 0.0);
     out->stages[i].param1 = SimmyJsonNumber(SimmyJsonObjectGet(stage, "param1"), 0.0);
+    const char *bad = NULL;
+    if (out->stages[i].type == SIMMY_STAGE_DELAY &&
+        (out->stages[i].param0 < 0.0 || out->stages[i].param0 > SIMMY_MAX_DELAY_STEPS - 2))
+      bad = "delay param0 must be in [0, SIMMY_MAX_DELAY_STEPS-2]";
+    if (out->stages[i].type == SIMMY_STAGE_SLEW && !(out->stages[i].param0 > 0.0))
+      bad = "slew param0 must be > 0";
+    if (bad) {
+      if (errMsg && errMsgLen) snprintf(errMsg, errMsgLen, "analogChain[%d]: %s", i, bad);
+      SimmyJsonFree(root);
+      return 1;
+    }
   }
 
   SimmyJsonFree(root);

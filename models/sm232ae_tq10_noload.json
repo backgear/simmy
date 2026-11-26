@@ -1,0 +1,32 @@
+{
+  "name": "sm232ae_tq10_noload",
+  "status": "fitted to one bench capture, not independently validated",
+  "description": "Parker/Compumotor SM232AE motor + TQ10 drive, free shaft, no load, driven by the analog-servo F103 firmware (RC-filtered PWM torque command). Single rigid body; drive path as an analog chain. See docs/sm232ae_tq10_noload.md.",
+  "source": {
+    "capture": "/tmp/claude-1001/sv/readmefinal.json (analog-servo tools/capture_moves.py readme sequence, F103, 2026-11-26)",
+    "fitDate": "2026-11-26",
+    "method": "closed loop: real analog-servo Control.c/Signal.c/MotionQueue.c driving this plant through the same sequence; differential evolution + Nelder-Mead on step traces, ramp phase-mean torque/error, post-step creep, rest chatter"
+  },
+  "units": {
+    "position": "encoder counts, 4096 per rev (quadrature edges); read with SimmyChainFeedbackPositionCounts (integer rounding = encoder quantization)",
+    "time": "tick = 1 ms (1 kHz control loop)",
+    "force": "analog-servo firmware torque units, axis frame, full scale +-32767 (not N*m, not amps)",
+    "analogChain": "every stage parameter is per analog-chain CALL; this preset assumes analogStepsPerTick calls per tick, each followed by SimmyChainStepDt(..., 1.0/analogStepsPerTick)"
+  },
+  "analogStepsPerTick": 10,
+
+  "bodies": [
+    {"inertia": 4439.525265174978,
+     "friction": 4.633519871529227,
+     "coulombLevel": 121.46459447099423,
+     "coulombPerForce": 0.05402461400491937,
+     "stictionLimit": 1134.8406873452998}
+  ],
+  "feedbackBody": 0,
+  "analogChain": [
+    {"type": "delay", "param0": 0.6200893889338953},
+    {"type": "slew", "param0": 7138.740768619219},
+    {"type": "lag", "param0": 0.7294786166389517},
+    {"type": "noise", "param0": 2253.413678673937}
+  ]
+}

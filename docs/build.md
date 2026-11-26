@@ -30,7 +30,8 @@ not a general-purpose, hardened JSON parser.
   "bodies": [
     {"inertia": 64, "friction": 0.02, "stictionLimit": 0, "coulombLevel": 0,
      "gravityBias": 0, "rippleAmplitude": 60, "ripplePeriodCounts": 20,
-     "frictionBumpCenter": 0, "frictionBumpHalfWidth": 0, "frictionBumpExtra": 0},
+     "frictionBumpCenter": 0, "frictionBumpHalfWidth": 0, "frictionBumpExtra": 0,
+     "coulombPerForce": 0},
     {"inertia": 8, "friction": 0.01, "stictionLimit": 80, "coulombLevel": 50}
   ],
   "couplings": [
@@ -49,8 +50,10 @@ there's no "how heavy is this body" default). Everything else defaults
 to 0/disabled if omitted. `couplings` needs exactly `bodies.length - 1`
 entries (extra ones are ignored, missing ones default to a no-op
 coupling). `analogChain` stage `type` is one of
-`gain`/`saturate`/`quantize`/`lag`/`noise`, using `param0`/`param1` per
-stage (see `include/simmy.h`'s enum comments for what each means).
+`gain`/`saturate`/`quantize`/`lag`/`noise`/`delay`/`slew`, using
+`param0`/`param1` per stage (`delay` must be within
+`[0, SIMMY_MAX_DELAY_STEPS-2]` and `slew` must be positive, or loading
+fails) (see `include/simmy.h`'s enum comments for what each means).
 
 `SimmyChainParamsFromJsonFile` and `SimmyAnalogChainParamsFromJsonFile`
 each read their own top-level section from the SAME file -- one JSON

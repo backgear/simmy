@@ -68,6 +68,7 @@
 
 #define SIMMY_MAX_BODIES 8
 #define SIMMY_MAX_ANALOG_STAGES 8
+#define SIMMY_MAX_DELAY_STEPS 32   /* ring length per DELAY stage; delay must be <= this - 2 */
 
 /* ==================== Mechanical body chain ========================= */
 
@@ -97,6 +98,12 @@ typedef struct {
   double frictionBumpExtra;     /* added to BOTH stictionLimit and coulombLevel while position
                                     is within the bump window. Works even starting from 0 base
                                     friction (a patch of stiction on an otherwise-free axis). */
+  double coulombPerForce;       /* extra kinetic Coulomb level per unit of |driving force|
+                                    (after gravityBias/ripple): coulombLevel + this*|F| while
+                                    sliding. Dimensionless; 0 disables. A phenomenological
+                                    stand-in for losses that grow with load -- or a drive that
+                                    delivers less than commanded while motoring and more while
+                                    braking. Does not change stictionLimit. */
 } SimmyBodyParams;
 
 typedef struct {
@@ -319,6 +326,13 @@ typedef enum {
   SIMMY_STAGE_QUANTIZE,   /* round value to the nearest multiple of param0 (a DAC's LSB step) */
   SIMMY_STAGE_LAG,        /* one-pole lag, alpha = param0 (0 < alpha <= 1; 1.0 = instant) */
   SIMMY_STAGE_NOISE,      /* add bounded pseudorandom noise, uniform in [-param0, param0] */
+  SIMMY_STAGE_DELAY,      /* transport delay of param0 calls (fractional, linear interpolation
+                              between stored samples; 0 <= param0 <= SIMMY_MAX_DELAY_STEPS-2).
+                              Starts from a history of zeros. */
+  SIMMY_STAGE_SLEW,       /* rate limit: output moves at most param0 (>0) per call toward the
+                              input. Starts from 0. Unlike LAG, a big swing takes longer than a
+                              small one -- e.g. an amplifier that reaches +full from 0 in
+                              half the time it takes to reverse from -full. */
 } SimmyAnalogStageType;
 
 typedef struct {
@@ -332,8 +346,10 @@ typedef struct {
 } SimmyAnalogChainParams;
 
 typedef struct {
-  double lagState[SIMMY_MAX_ANALOG_STAGES];   /* only entries for LAG stages are meaningful */
+  double lagState[SIMMY_MAX_ANALOG_STAGES];   /* LAG state, or SLEW's last output */
   uint32_t rngState;                           /* for NOISE stages */
+  double delayLine[SIMMY_MAX_ANALOG_STAGES][SIMMY_MAX_DELAY_STEPS];   /* DELAY history */
+  int delayHead[SIMMY_MAX_ANALOG_STAGES];
 } SimmyAnalogChainState;
 
 void SimmyAnalogChainInit(SimmyAnalogChainState *state, uint32_t noiseSeed);

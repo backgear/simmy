@@ -1,8 +1,9 @@
 # The mechanical body chain
 
 A chain of 1 to `SIMMY_MAX_BODIES` (8) rigid bodies, each with its own
-inertia, viscous friction, static friction (stiction + Coulomb), gravity
-bias, periodic ripple, and an optional one-off localized friction "speed
+inertia, viscous friction, static friction (stiction + Coulomb, with an
+optional Coulomb term that grows with |driving force|, `coulombPerForce`),
+gravity bias, periodic ripple, and an optional one-off localized friction "speed
 bump" (a dusty/less-greased section, distinct from the recurring
 ripple). Adjacent bodies connect through a `SimmyCouplingParams`: spring
 stiffness, damping, an optional backlash dead-zone, and an optional
