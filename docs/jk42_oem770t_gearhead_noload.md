@@ -10,12 +10,33 @@ The canonical preset is `models/jk42_oem770t_gearhead_noload.json`.
     uncertain. Same-session holdout checks do not establish performance
     with another load or controller tune.
 
-## Stepping and units
+## Bench comparison
 
-Load both the mechanical and analog chains from the preset. Run the
-analog chain **ten times per 1 ms tick**, stepping the mechanical chain
-by `0.1` tick after every call. The preset's four internal mechanical
-substeps give 40 mechanical steps per control tick.
+![JK42 readme sequence: bench versus simulated canonical preset](assets/models/jk42-readme-comparison.png)
+
+The model was fitted jointly to `simset` closed-loop moves and a velocity
+triangle, `sq` open-loop torque squares, `ripdir` jogs, and `backlash`
+slow reversals, captured on 2026-11-26. The real analog-servo `Control.c`,
+`Signal.c`, `MotionQueue.c`, and `MotionReference.c` ran each candidate,
+using the `planner-lead-10ms` configuration and fast-planner flags.
+
+The comparison above uses the same-session `readme_jk` holdout, with older
+controller settings. Only ripple phase was recalibrated by a 25-point
+scan against its ramp envelope; the step/creep response was not refitted.
+
+| Holdout metric | Bench | Simulated |
+|---|---:|---:|
+| Step out overshoot, counts | 15 | 14 |
+| Step back overshoot, counts | 9 | 10 |
+| Step out settle within ±5, ms | 49 | 47 |
+| Step back settle within ±5, ms | 59 | 48 |
+| Ramp maximum following error, counts | 12 | 11 |
+| Ramp torque-envelope peak | 7468 | 6930 |
+
+## Using it
+
+Load both the mechanical and analog chains from the preset. The loop
+below follows the preset's [analog-chain call rate](#analog-chain-call-rate).
 
 ```c
 SimmyChainParams chain;
@@ -38,6 +59,8 @@ for (;;) { /* one 1 ms controller tick */
 }
 ```
 
+### Units
+
 - Body 0 is the motor encoder: 4000 decoded counts per motor revolution.
 - All other bodies use **motor-reflected** counts. The measured ratio is
   about 54989 motor counts per output revolution. Divide body 2's position
@@ -50,6 +73,16 @@ for (;;) { /* one 1 ms controller tick */
 - Each backlash value is a **half-gap** in motor-reflected counts.
 - Ripple phase is relative to the fitting capture's encoder zero. For
   another zero, adjust phase rather than treating it as a new gearbox.
+
+## Analog-chain call rate
+
+The analog-chain parameters are per **call**, not per controller tick.
+Run the analog chain **ten times per 1 ms tick**, stepping the mechanical
+chain by `0.1` tick after every call. The preset's four internal mechanical
+substeps give 40 mechanical steps per control tick.
+
+Changing this call rate changes the effective delay and lag. Keep the
+preset's `analogStepsPerTick` value of 10 when replaying its fitted response.
 
 ## Three effective bodies
 
@@ -79,30 +112,7 @@ is −26.05, and torque-proportional Coulomb coefficient is 0.003674.
 The analog chain adds a delay of 0.20963 tick and lag of about 0.08106 tick.
 There is no fitted noise or slew stage.
 
-## Bench comparison
-
-![JK42 readme sequence: bench versus simulated canonical preset](assets/models/jk42-readme-comparison.png)
-
-The model was fitted jointly to `simset` closed-loop moves and a velocity
-triangle, `sq` open-loop torque squares, `ripdir` jogs, and `backlash`
-slow reversals, captured on 2026-11-26. The real analog-servo `Control.c`,
-`Signal.c`, `MotionQueue.c`, and `MotionReference.c` ran each candidate,
-using the `planner-lead-10ms` configuration and fast-planner flags.
-
-The comparison above uses the same-session `readme_jk` holdout, with older
-controller settings. Only ripple phase was recalibrated by a 25-point
-scan against its ramp envelope; the step/creep response was not refitted.
-
-| Holdout metric | Bench | Simulated |
-|---|---:|---:|
-| Step out overshoot, counts | 15 | 14 |
-| Step back overshoot, counts | 9 | 10 |
-| Step out settle within ±5, ms | 49 | 47 |
-| Step back settle within ±5, ms | 59 | 48 |
-| Ramp maximum following error, counts | 12 | 11 |
-| Ramp torque-envelope peak | 7468 | 6930 |
-
-### Creep and sensitivity checks
+## Creep and sensitivity checks
 
 ![Post-move following error: bench and simulated candidates](assets/models/jk42-creep-comparison.png)
 
