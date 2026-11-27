@@ -47,6 +47,10 @@ extra_css:
 nav:
   - Home: index.md
   - Build: build.md
+  - Bundled models:
+      - Overview and comparisons: bundled-models.md
+      - SM232AE / TQ10, free shaft: sm232ae_tq10_noload.md
+      - JK42 / OEM770T, two-stage gearhead: jk42_oem770t_gearhead_noload.md
   - Motors:
       - Brushed DC: motors/dc.md
       - BLDC / permanent-magnet: motors/bldc.md

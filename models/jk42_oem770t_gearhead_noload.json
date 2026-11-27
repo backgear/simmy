@@ -1,0 +1,56 @@
+{
+  "name": "jk42_oem770t_gearhead_noload",
+  "status": "fitted to one bench session, not independently validated",
+  "description": "JK42 BLDC motor + OEM770T drive + two-stage planetary gearhead (~13.75:1), no output load. Three effective bodies: motor plus first sun, first carrier plus second sun, second carrier plus output. Stage parameters are fitted placeholders, not measured gearbox mechanics. See docs/jk42_oem770t_gearhead_noload.md.",
+  "source": {
+    "captures": "simset, sq, ripdir, backlash (fit); readme_jk (same-session holdout); F103, 2026-11-26",
+    "fitDate": "2026-11-26",
+    "method": "Real analog-servo Control.c/Signal.c/MotionQueue.c/MotionReference.c, planner-lead-10ms with fast-planner flags. Differential-evolution topology search and warm-start three-body refinement, including a post-move creep penalty.",
+    "reproduction": "analog-servo experiments/motion-planner/gearhead-multibody/reproduction.tar.gz; refined-three-body.json records parameters, checks, and initial population"
+  },
+  "units": {
+    "position": "All bodies in motor-reflected encoder counts: 4000 per motor revolution, 54989 per output revolution measured. Feedback is body 0. Divide the output body's coordinate by 54989 for output revolutions.",
+    "reflection": "Physical downstream inertia is divided by cumulative speed-reduction ratio squared when reflected to the motor; fitted body inertias are already reflected.",
+    "time": "tick = 1 ms (1 kHz control loop)",
+    "force": "analog-servo firmware torque units, axis frame, full scale +-32767; not measured current or N m",
+    "ripplePhase": "Relative to simset's encoder zero; recalibrate phase for another encoder zero.",
+    "backlashGap": "Half-gap in motor-reflected counts, not physical output counts",
+    "analogChain": "Per CALL: run analogStepsPerTick analog calls per tick, each followed by SimmyChainStepDt(..., 1.0/analogStepsPerTick)."
+  },
+  "analogStepsPerTick": 10,
+  "bodies": [
+    {
+      "inertia": 2437.7814793835264,
+      "friction": 4.5604481037521385,
+      "coulombLevel": 759.1430466685078,
+      "stictionLimit": 1151.1524778717223,
+      "coulombPerForce": 0.0036737088454616646,
+      "gravityBias": -26.045884721091156,
+      "rippleAmplitude": 1255.5075039994442,
+      "ripplePeriodCounts": 333.25,
+      "ripplePhase": 0.6961829098009289
+    },
+    {
+      "inertia": 203.30285554898816,
+      "friction": 1.6696721519553333,
+      "coulombLevel": 277.9376007656079,
+      "stictionLimit": 538.6149406041748
+    },
+    {
+      "inertia": 150.01880641672838,
+      "friction": 1.232064461992925,
+      "coulombLevel": 205.09238304888726,
+      "stictionLimit": 397.4482812327498
+    }
+  ],
+  "couplings": [
+    {"springK": 27204.5540239571, "springD": 1626.4228443919053, "backlashGap": 17.022855880354513},
+    {"springK": 1667.274376965682, "springD": 122.49612053625255, "backlashGap": 17.169837688537093}
+  ],
+  "feedbackBody": 0,
+  "subSteps": 4,
+  "analogChain": [
+    {"type": "delay", "param0": 2.0963075205582764},
+    {"type": "lag", "param0": 0.7087532879460348}
+  ]
+}

@@ -35,19 +35,26 @@ static void BodyMechanicalStep(SimmyBodyState *s, const SimmyBodyParams *p,
                                 double drivingForce, double dt) {
   drivingForce -= p->gravityBias;
   if (p->rippleAmplitude != 0.0 && p->ripplePeriodCounts != 0.0) {
-    drivingForce -= p->rippleAmplitude * sin(SIMMY_TWO_PI * s->position / p->ripplePeriodCounts);
+    drivingForce -= p->rippleAmplitude *
+        sin(SIMMY_TWO_PI * s->position / p->ripplePeriodCounts + p->ripplePhase);
   }
 
   double stictionLimit = p->stictionLimit;
-  double coulombLevel = p->coulombLevel;
+  double coulombLevel = p->coulombLevel + p->coulombPerForce * fabs(drivingForce);
   if (p->frictionBumpHalfWidth > 0.0 &&
       fabs(s->position - p->frictionBumpCenter) <= p->frictionBumpHalfWidth) {
     stictionLimit += p->frictionBumpExtra;
     coulombLevel += p->frictionBumpExtra;
   }
 
-  if (stictionLimit > 0.0 && fabs(s->velocity) < SIMMY_STICTION_VELOCITY_EPSILON &&
-      fabs(drivingForce) <= stictionLimit) {
+  /* Kinetic (Coulomb) friction can stop a body but never start it moving
+   * backwards: at rest, a force no bigger than max(stiction, Coulomb) holds
+   * it. Without the Coulomb half of that max, a body at rest with Coulomb
+   * friction above its stiction limit (or with no stiction at all) would be
+   * pushed AGAINST a small applied force -- or moved by no force at all. */
+  double holdLimit = stictionLimit > coulombLevel ? stictionLimit : coulombLevel;
+  if (holdLimit > 0.0 && fabs(s->velocity) < SIMMY_STICTION_VELOCITY_EPSILON &&
+      fabs(drivingForce) <= holdLimit) {
     s->velocity = 0.0;
     return;
   }
@@ -59,7 +66,13 @@ static void BodyMechanicalStep(SimmyBodyState *s, const SimmyBodyParams *p,
         : (s->velocity > 0.0 ? 1.0 : -1.0);
     frictionForce += coulombLevel * slideDirection;
   }
+  double before = s->velocity;
   s->velocity += (drivingForce - frictionForce) / p->inertia * dt;
+  /* Same rule while sliding to a stop: if friction alone carried the body
+   * through zero within this step, stop it there instead. */
+  if (before != 0.0 && (before > 0.0) != (s->velocity > 0.0) && fabs(drivingForce) <= holdLimit &&
+      coulombLevel > 0.0)
+    s->velocity = 0.0;
   s->position += s->velocity * dt;
 }
 
@@ -174,7 +187,11 @@ int32_t SimmyChainBodyVelocityCounts(const SimmyChainState *state, int bodyIndex
 /* ==================== Analog signal chain ============================ */
 
 void SimmyAnalogChainInit(SimmyAnalogChainState *state, uint32_t noiseSeed) {
-  for (int i = 0; i < SIMMY_MAX_ANALOG_STAGES; i++) state->lagState[i] = 0.0;
+  for (int i = 0; i < SIMMY_MAX_ANALOG_STAGES; i++) {
+    state->lagState[i] = 0.0;
+    state->delayHead[i] = 0;
+    for (int j = 0; j < SIMMY_MAX_DELAY_STEPS; j++) state->delayLine[i][j] = 0.0;
+  }
   state->rngState = noiseSeed ? noiseSeed : 0x9e3779b9u;
 }
 
@@ -201,6 +218,32 @@ double SimmyAnalogChainStep(SimmyAnalogChainState *state, const SimmyAnalogChain
       case SIMMY_STAGE_NOISE:
         value += stage->param0 * UniformSigned(&state->rngState);
         break;
+      case SIMMY_STAGE_DELAY: {
+        /* Store this call's input, then read param0 calls back. Delay 0
+         * passes the input straight through. */
+        double *line = state->delayLine[i];
+        int head = state->delayHead[i];
+        double back = stage->param0;
+        if (back < 0.0) back = 0.0;
+        if (back > SIMMY_MAX_DELAY_STEPS - 2) back = SIMMY_MAX_DELAY_STEPS - 2;
+        int whole = (int)floor(back);
+        double frac = back - whole;
+        line[head] = value;
+        double a = line[(head - whole + SIMMY_MAX_DELAY_STEPS) % SIMMY_MAX_DELAY_STEPS];
+        double b = line[(head - whole - 1 + SIMMY_MAX_DELAY_STEPS) % SIMMY_MAX_DELAY_STEPS];
+        value = a + (b - a) * frac;
+        state->delayHead[i] = (head + 1) % SIMMY_MAX_DELAY_STEPS;
+        break;
+      }
+      case SIMMY_STAGE_SLEW: {
+        double held = state->lagState[i];
+        if (stage->param0 > 0.0) {
+          if (value > held + stage->param0) value = held + stage->param0;
+          else if (value < held - stage->param0) value = held - stage->param0;
+        }
+        state->lagState[i] = value;
+        break;
+      }
     }
   }
   return value;
