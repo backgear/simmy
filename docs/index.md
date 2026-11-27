@@ -66,6 +66,7 @@ to your own machine.
 | If you want to... | See |
 |---|---|
 | Build it and run a minimal example | [Build](build.md) |
+| Run a fitted plant and compare it with the bench | [Bundled models and comparison plots](bundled-models.md) |
 | Pick sample parameters for a motor | [Brushed DC](motors/dc.md), [BLDC](motors/bldc.md), [Induction (3-phase)](motors/induction.md), [Stepper](motors/stepper.md), [Solenoid/linear actuators](motors/solenoid.md) |
 | Understand the fixed clock rates in the examples | [Loop frequencies](loop-frequencies.md) |
 | Wire in your own controller | [Driving simmy with your own controller](integration.md) |

@@ -11,6 +11,14 @@ real `Control.c` cascade against it, and do the step and ramp responses
 look like the bench? For the readme move sequence they do: the torque pulse
 widths, the velocity peaks and the rest chatter all line up (table below).
 
+## Bench comparison
+
+![SM232AE readme sequence: recorded versus simulated step and velocity triangle](assets/models/sm232ae-readme-comparison.png)
+
+This is the fitting capture, using the same controller and command
+sequence, with noise seed 1. It is not a held-out validation recording.
+See [all bundled models and comparison plots](bundled-models.md).
+
 ## Using it
 
 The preset is an ordinary simmy config: one rigid body plus an analog
