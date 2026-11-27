@@ -144,6 +144,59 @@ static void test_coulomb_per_force_makes_braking_stronger_than_motoring(void) {
   assert(fabs(state.bodies[0].velocity - (-5.0)) < 1e-9);
 }
 
+/* Coulomb friction alone must never move a body at rest, or push it
+ * against a small force -- with or without a (smaller) stiction limit. */
+static void test_coulomb_at_rest_never_starts_motion(void) {
+  SimmyChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.bodyCount = 1;
+  params.bodies[0].inertia = 10.0;
+  params.bodies[0].coulombLevel = 100.0;           /* no stiction at all */
+  SimmyChainState state;
+  SimmyChainInit(&state, &params);
+  for (int i = 0; i < 100; i++) SimmyChainStep(&state, &params, 0.0);
+  assert(state.bodies[0].position == 0.0 && state.bodies[0].velocity == 0.0);
+  for (int i = 0; i < 100; i++) SimmyChainStep(&state, &params, 60.0);   /* below Coulomb */
+  assert(state.bodies[0].position == 0.0);
+  params.bodies[0].stictionLimit = 50.0;           /* stiction below Coulomb */
+  for (int i = 0; i < 100; i++) SimmyChainStep(&state, &params, 80.0);
+  assert(state.bodies[0].position == 0.0);
+  SimmyChainStep(&state, &params, 150.0);          /* above both: moves forward */
+  assert(state.bodies[0].velocity > 0.0);
+}
+
+/* A sliding body that coasts to a stop under Coulomb friction stops at
+ * zero velocity rather than reversing. */
+static void test_coulomb_coast_stops_instead_of_reversing(void) {
+  SimmyChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.bodyCount = 1;
+  params.bodies[0].inertia = 10.0;
+  params.bodies[0].coulombLevel = 100.0;
+  SimmyChainState state;
+  SimmyChainInit(&state, &params);
+  state.bodies[0].velocity = 25.0;                 /* decel 10/tick: crosses zero mid-step */
+  for (int i = 0; i < 10; i++) {
+    SimmyChainStep(&state, &params, 0.0);
+    assert(state.bodies[0].velocity >= 0.0);
+  }
+  assert(state.bodies[0].velocity == 0.0);
+}
+
+static void test_ripple_phase_shifts_ripple(void) {
+  SimmyChainParams params;
+  memset(&params, 0, sizeof(params));
+  params.bodyCount = 1;
+  params.bodies[0].inertia = 1.0;
+  params.bodies[0].rippleAmplitude = 10.0;
+  params.bodies[0].ripplePeriodCounts = 100.0;
+  params.bodies[0].ripplePhase = 1.5707963267948966;   /* sin(x + pi/2) = cos(x) */
+  SimmyChainState state;
+  SimmyChainInit(&state, &params);
+  SimmyChainStep(&state, &params, 0.0);           /* at x=0: force -10*cos(0) = -10 */
+  assert(fabs(state.bodies[0].velocity - (-10.0)) < 1e-9);
+}
+
 static void test_ripple_is_periodic_in_position_not_time(void) {
   /* A body held at a FIXED position (huge inertia, tiny force) should see
    * the same ripple contribution every time it returns to the same
@@ -703,6 +756,9 @@ int main(void) {
   test_single_body_stiction_does_not_chatter();
   test_friction_bump_is_localized_and_measurable();
   test_coulomb_per_force_makes_braking_stronger_than_motoring();
+  test_coulomb_at_rest_never_starts_motion();
+  test_coulomb_coast_stops_instead_of_reversing();
+  test_ripple_phase_shifts_ripple();
   test_ripple_is_periodic_in_position_not_time();
   test_two_body_free_oscillation_decays();
   test_two_body_coupling_pulls_together_not_apart();

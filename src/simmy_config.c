@@ -38,6 +38,7 @@ static void FillBodyParams(SimmyBodyParams *out, const SimmyJsonValue *obj) {
   out->gravityBias = SimmyJsonNumber(SimmyJsonObjectGet(obj, "gravityBias"), 0.0);
   out->rippleAmplitude = SimmyJsonNumber(SimmyJsonObjectGet(obj, "rippleAmplitude"), 0.0);
   out->ripplePeriodCounts = SimmyJsonNumber(SimmyJsonObjectGet(obj, "ripplePeriodCounts"), 0.0);
+  out->ripplePhase = SimmyJsonNumber(SimmyJsonObjectGet(obj, "ripplePhase"), 0.0);
   out->frictionBumpCenter = SimmyJsonNumber(SimmyJsonObjectGet(obj, "frictionBumpCenter"), 0.0);
   out->frictionBumpHalfWidth = SimmyJsonNumber(SimmyJsonObjectGet(obj, "frictionBumpHalfWidth"), 0.0);
   out->frictionBumpExtra = SimmyJsonNumber(SimmyJsonObjectGet(obj, "frictionBumpExtra"), 0.0);

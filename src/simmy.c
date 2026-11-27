@@ -35,7 +35,8 @@ static void BodyMechanicalStep(SimmyBodyState *s, const SimmyBodyParams *p,
                                 double drivingForce, double dt) {
   drivingForce -= p->gravityBias;
   if (p->rippleAmplitude != 0.0 && p->ripplePeriodCounts != 0.0) {
-    drivingForce -= p->rippleAmplitude * sin(SIMMY_TWO_PI * s->position / p->ripplePeriodCounts);
+    drivingForce -= p->rippleAmplitude *
+        sin(SIMMY_TWO_PI * s->position / p->ripplePeriodCounts + p->ripplePhase);
   }
 
   double stictionLimit = p->stictionLimit;
@@ -46,8 +47,14 @@ static void BodyMechanicalStep(SimmyBodyState *s, const SimmyBodyParams *p,
     coulombLevel += p->frictionBumpExtra;
   }
 
-  if (stictionLimit > 0.0 && fabs(s->velocity) < SIMMY_STICTION_VELOCITY_EPSILON &&
-      fabs(drivingForce) <= stictionLimit) {
+  /* Kinetic (Coulomb) friction can stop a body but never start it moving
+   * backwards: at rest, a force no bigger than max(stiction, Coulomb) holds
+   * it. Without the Coulomb half of that max, a body at rest with Coulomb
+   * friction above its stiction limit (or with no stiction at all) would be
+   * pushed AGAINST a small applied force -- or moved by no force at all. */
+  double holdLimit = stictionLimit > coulombLevel ? stictionLimit : coulombLevel;
+  if (holdLimit > 0.0 && fabs(s->velocity) < SIMMY_STICTION_VELOCITY_EPSILON &&
+      fabs(drivingForce) <= holdLimit) {
     s->velocity = 0.0;
     return;
   }
@@ -59,7 +66,13 @@ static void BodyMechanicalStep(SimmyBodyState *s, const SimmyBodyParams *p,
         : (s->velocity > 0.0 ? 1.0 : -1.0);
     frictionForce += coulombLevel * slideDirection;
   }
+  double before = s->velocity;
   s->velocity += (drivingForce - frictionForce) / p->inertia * dt;
+  /* Same rule while sliding to a stop: if friction alone carried the body
+   * through zero within this step, stop it there instead. */
+  if (before != 0.0 && (before > 0.0) != (s->velocity > 0.0) && fabs(drivingForce) <= holdLimit &&
+      coulombLevel > 0.0)
+    s->velocity = 0.0;
   s->position += s->velocity * dt;
 }
 

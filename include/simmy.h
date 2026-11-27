@@ -90,6 +90,10 @@ typedef struct {
                                     caller's choice of period/amplitude picks which. 0 disables. */
   double ripplePeriodCounts;    /* spatial period of the ripple, in counts. Ignored if
                                     rippleAmplitude is 0. */
+  double ripplePhase;           /* radians: ripple force = amplitude*sin(2*pi*position/period
+                                    + phase). Lets a ripple measured against an encoder's
+                                    arbitrary zero be placed without moving the body. 0 = the
+                                    previous behavior. */
   double frictionBumpCenter;    /* position (counts) of a ONE-OFF localized patch of extra
                                     friction -- e.g. a dusty/less-greased section of a way,
                                     NOT a recurring effect like the ripple above. */
